@@ -1,0 +1,42 @@
+# Environment and secrets
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+
+# uv
+.python-version
+
+# Generated Datasphere job configs (contain project-specific IDs)
+jobs/configs/.generated/
+
+# Training artifacts (stored in Object Storage, not locally)
+checkpoints/
+runs/
+metrics/
+*.pt
+*.pth
+*.ckpt
+
+# Dataset (61 GB — use Object Storage)
+kvasir-capsule/
+data/
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Datasphere job logs
+job_progress.jsonl
+*.log

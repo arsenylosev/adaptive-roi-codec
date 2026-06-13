@@ -1,0 +1,5 @@
+quantizer:
+  kappa: 2.0
+
+experiments:
+  kappa_values: [1.0, 1.5, 2.0, 2.5]

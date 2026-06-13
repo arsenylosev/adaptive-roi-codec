@@ -1,0 +1,41 @@
+name: ${JOB_NAME}
+desc: ${JOB_DESC}
+
+cmd: >
+  python -m adaptive_roi_codec.train
+    --config ${CONFIG}
+    --params ${PARAMS}
+
+env:
+  python: auto
+  vars:
+    - PYTHONPATH: .
+    - S3_CONNECTOR_ID: ${S3_CONNECTOR_ID}
+    - S3_DATA_PREFIX: ${S3_DATA_PREFIX}
+    - S3_CHECKPOINT_SUBDIR: ${S3_CHECKPOINT_SUBDIR}
+    - TRAIN_METRICS_PATH: metrics/train_metrics.json
+
+inputs:
+  - configs/base.yaml: CONFIG
+  - jobs/inputs/train_input.json: PARAMS
+
+outputs:
+  - metrics/train_metrics.json: METRICS
+
+s3-mounts:
+  - ${S3_CONNECTOR_ID}
+
+flags:
+  - attach-project-disk
+
+cloud-instance-types:
+  - g1.1
+  - g2.1
+
+working-storage:
+  type: SSD
+  size: ${WORKING_STORAGE_GB}Gb
+
+graceful-shutdown:
+  signal: SIGTERM
+  timeout: 30s

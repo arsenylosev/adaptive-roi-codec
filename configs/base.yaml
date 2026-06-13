@@ -1,0 +1,39 @@
+model:
+  latent_h: 68
+  latent_w: 120
+  latent_ch: 192
+  input_res: [1920, 1080]
+
+training:
+  batch_size: 4
+  lr: 1.0e-4
+  epochs: 50
+  warmup_epochs: 5
+  alpha: 0.5
+  lambda_roi: 1.5
+  lambda_rate: 0.01
+  lambda_temp: 0.1
+  beta_0: 0.01
+  eta: 0.5
+
+quantizer:
+  q_min: 0.1
+  q_max: 2.0
+  kappa: 2.0
+  alpha_spatial: 0.5
+
+roi_detector:
+  input_res: 512
+  backbone: mobilenet_v3_large
+  pretrained: true
+
+data:
+  s3_prefix: kvasir-capsule
+  local_root: data/kvasir-capsule
+  dry_run_samples: 4
+  debug_res: [640, 384]
+
+checkpoints:
+  subdir: checkpoints
+  save_every_epochs: 5
+  local_dir: checkpoints

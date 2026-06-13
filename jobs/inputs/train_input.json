@@ -1,0 +1,9 @@
+{
+  "experiment_id": "baseline-kappa-2.0",
+  "training": {
+    "epochs": 50
+  },
+  "quantizer": {
+    "kappa": 2.0
+  }
+}
