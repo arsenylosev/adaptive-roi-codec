@@ -106,6 +106,17 @@ Edit `jobs/inputs/train_input.json` to change κ, λ_ROI, epoch count, or experi
 - Use `.env.example` as a template for other machines.
 - Do not commit checkpoints or the 61 GB dataset.
 
+## Architecture
+
+Key design decisions are recorded as ADRs in `docs/decisions/`. Start with [ADR-001: Datasphere Jobs training](docs/decisions/ADR-001-datasphere-jobs-training.md).
+
+## Testing
+
+```bash
+uv sync --extra dev
+uv run pytest
+```
+
 ## References
 
 Specification and paper targets: [MCE-Experiment-Requirements-EN.md](MCE-Experiment-Requirements-EN.md)

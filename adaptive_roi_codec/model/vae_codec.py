@@ -116,6 +116,13 @@ class VAECodec(nn.Module):
         mu, logvar, skips = self.encoder(frame)
         z = self.reparameterize(mu, logvar)
         recon = self.decoder(z, skips)
+        if recon.shape[-2:] != frame.shape[-2:]:
+            recon = F.interpolate(
+                recon,
+                size=frame.shape[-2:],
+                mode="bilinear",
+                align_corners=False,
+            )
 
         warped_prev = prev_recon
         if prev_recon is not None and prev_z is not None:
