@@ -55,37 +55,129 @@ yc iam access-key create --service-account-name <service-account>
 
 Put credentials in `.env` (see `.env.example`).
 
-## 3. Upload to S3
+Assign the service account **`storage.editor`** (or `storage.admin`) on the folder or bucket. Without this role, uploads fail even with valid keys.
+
+## 3. Upload to Object Storage
+
+Yandex Object Storage is S3-compatible. You can upload with **`yc storage s3`** (recommended) or **AWS CLI**.
+
+### Option A — `yc storage s3` (recommended)
+
+Uses your `yc init` login — no static keys in the shell, fewer signing mistakes.
+
+Preflight (check bucket access):
 
 ```bash
-source .env   # or export AWS_* / S3_* variables
+yc storage bucket list
+yc storage s3api list-objects --bucket "$S3_BUCKET" --max-keys 5
+```
 
-# Manifest + splits (small)
-aws s3 cp kvasir-capsule/MANIFEST.json \
-  s3://$S3_BUCKET/kvasir-capsule/MANIFEST.json \
-  --endpoint-url $S3_ENDPOINT_URL
+Upload dataset (legacy local layout `labelled_videos/` → S3 prefix `raw/labelled_videos/`):
 
-aws s3 cp kvasir-capsule/splits/ \
-  s3://$S3_BUCKET/kvasir-capsule/splits/ \
-  --recursive --endpoint-url $S3_ENDPOINT_URL
+```bash
+export S3_BUCKET=adaptive-roi-codec-data   # or from .env
 
-# Videos (~31 GB for 43 files)
-aws s3 cp kvasir-capsule/raw/labelled_videos/ \
-  s3://$S3_BUCKET/kvasir-capsule/raw/labelled_videos/ \
-  --recursive --endpoint-url $S3_ENDPOINT_URL
+# Small metadata first
+yc storage s3 cp kvasir-capsule/MANIFEST.json \
+  s3://$S3_BUCKET/kvasir-capsule/MANIFEST.json
+
+yc storage s3 cp kvasir-capsule/splits/ \
+  s3://$S3_BUCKET/kvasir-capsule/splits/ --recursive
+
+# Videos (~31 GB)
+yc storage s3 cp kvasir-capsule/labelled_videos/ \
+  s3://$S3_BUCKET/kvasir-capsule/raw/labelled_videos/ --recursive
 
 # Label archives (~521 MB)
-aws s3 cp kvasir-capsule/raw/labelled_images/ \
-  s3://$S3_BUCKET/kvasir-capsule/raw/labelled_images/ \
-  --recursive --endpoint-url $S3_ENDPOINT_URL
+yc storage s3 cp kvasir-capsule/labelled_images/ \
+  s3://$S3_BUCKET/kvasir-capsule/raw/labelled_images/ --recursive
 ```
 
-Verify:
+If you already moved folders under `raw/` locally, change the source paths to `kvasir-capsule/raw/labelled_videos/`, etc.
+
+Docs: [AWS CLI tools for Object Storage](https://yandex.cloud/en/docs/storage/tools/aws-cli) (same S3 API; `yc storage s3` is a built-in wrapper).
+
+### Option B — AWS CLI with static access keys
+
+**Do not use `uvx --with awscli` for large uploads** unless you explicitly export all three variables below — `uvx` ignores `aws configure` and often omits the region, which causes:
+
+`SignatureDoesNotMatch … CreateMultipartUpload`
+
+Required environment (from `yc iam access-key create`):
 
 ```bash
-aws s3 ls s3://$S3_BUCKET/kvasir-capsule/raw/labelled_videos/ \
-  --endpoint-url $S3_ENDPOINT_URL | wc -l
+set -a && source .env && set +a
+
+# All three are mandatory for Yandex Object Storage:
+echo "$AWS_ACCESS_KEY_ID" | head -c 8    # should print first chars of key ID
+echo "$AWS_DEFAULT_REGION"               # MUST print: ru-central1
+# AWS_SECRET_ACCESS_KEY must be the *secret* field, not the key ID
 ```
+
+One-time configure (persists in `~/.aws/`):
+
+```bash
+aws configure set aws_access_key_id "$AWS_ACCESS_KEY_ID"
+aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY"
+aws configure set region ru-central1
+aws configure set endpoint_url https://storage.yandexcloud.net
+```
+
+Preflight — upload a tiny test object:
+
+```bash
+echo test > /tmp/yc-upload-test.txt
+aws s3 cp /tmp/yc-upload-test.txt \
+  s3://$S3_BUCKET/kvasir-capsule/_preflight/upload-test.txt
+aws s3 rm s3://$S3_BUCKET/kvasir-capsule/_preflight/upload-test.txt
+```
+
+If preflight succeeds, upload the dataset (`--endpoint-url` before `s3` is the form Yandex documents):
+
+```bash
+aws --endpoint-url=https://storage.yandexcloud.net s3 cp \
+  kvasir-capsule/MANIFEST.json \
+  s3://$S3_BUCKET/kvasir-capsule/MANIFEST.json
+
+aws --endpoint-url=https://storage.yandexcloud.net s3 cp \
+  kvasir-capsule/splits/ \
+  s3://$S3_BUCKET/kvasir-capsule/splits/ --recursive
+
+aws --endpoint-url=https://storage.yandexcloud.net s3 cp \
+  kvasir-capsule/labelled_videos/ \
+  s3://$S3_BUCKET/kvasir-capsule/raw/labelled_videos/ --recursive
+
+aws --endpoint-url=https://storage.yandexcloud.net s3 cp \
+  kvasir-capsule/labelled_images/ \
+  s3://$S3_BUCKET/kvasir-capsule/raw/labelled_images/ --recursive
+```
+
+### Verify upload
+
+```bash
+yc storage s3api list-objects \
+  --bucket "$S3_BUCKET" \
+  --prefix kvasir-capsule/raw/labelled_videos/ \
+  --max-keys 1000 | grep -c key
+# Expect: 43
+
+yc storage s3api list-objects \
+  --bucket "$S3_BUCKET" \
+  --prefix kvasir-capsule/raw/labelled_images/ \
+  --max-keys 100 | grep -c key
+# Expect: 14
+```
+
+### Upload path mapping
+
+| Local (your folder) | S3 key prefix |
+|---------------------|---------------|
+| `kvasir-capsule/MANIFEST.json` | `kvasir-capsule/MANIFEST.json` |
+| `kvasir-capsule/splits/` | `kvasir-capsule/splits/` |
+| `kvasir-capsule/labelled_videos/` | `kvasir-capsule/raw/labelled_videos/` |
+| `kvasir-capsule/labelled_images/` | `kvasir-capsule/raw/labelled_images/` |
+
+Training resolves videos at `/job/s3/<connector>/kvasir-capsule/raw/labelled_videos/` (or legacy `labelled_videos/`).
 
 ## 4. DataSphere S3 connector
 
@@ -218,6 +310,8 @@ Run separate jobs with distinct `experiment_id` values:
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
+| **`SignatureDoesNotMatch` on upload** | Missing/wrong `AWS_DEFAULT_REGION`, swapped key ID/secret, or `uvx` without env | Use **`yc storage s3 cp`** (Option A), or export `AWS_DEFAULT_REGION=ru-central1` + run preflight test (Option B) |
+| **`AccessDenied`** | Service account lacks `storage.editor` | Assign role on folder/bucket in IAM |
 | `Video directory not found` | Wrong S3 prefix layout | Upload under `kvasir-capsule/raw/labelled_videos/` |
 | `Split file not found` | Missing splits on S3 | Upload `splits/` or run manifest builder before upload |
 | Job fails on import cv2 | OpenCV missing in venv | Run `uv sync` before `launch-train --execute` (`python: auto`) |
