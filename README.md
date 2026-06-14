@@ -91,6 +91,10 @@ ADRs in `docs/decisions/`:
 - Store API keys and cloud IDs only in `.env` (gitignored).
 - Do not commit checkpoints or the dataset.
 
+## Contributing
+
+Commit messages follow [Conventional Commits](CONTRIBUTING.md) (`feat:`, `fix:`, `docs:`, etc.).
+
 ## References
 
 - [Cloud launch guide](docs/guides/cloud-launch.md)
