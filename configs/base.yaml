@@ -1,8 +1,8 @@
 model:
-  latent_h: 68
-  latent_w: 120
+  latent_h: 21
+  latent_w: 21
   latent_ch: 192
-  input_res: [1920, 1080]
+  input_res: [336, 336]
 
 training:
   batch_size: 4
@@ -23,15 +23,21 @@ quantizer:
   alpha_spatial: 0.5
 
 roi_detector:
-  input_res: 512
+  input_res: 336
   backbone: mobilenet_v3_large
   pretrained: true
 
 data:
   s3_prefix: kvasir-capsule
-  local_root: data/kvasir-capsule
+  local_root: kvasir-capsule
+  video_subdir: raw/labelled_videos
+  splits_subdir: splits
+  split: train
+  frame_stride: 30
+  max_frames_per_video: null
+  num_workers: 2
   dry_run_samples: 4
-  debug_res: [640, 384]
+  debug_res: [336, 336]
 
 checkpoints:
   subdir: checkpoints

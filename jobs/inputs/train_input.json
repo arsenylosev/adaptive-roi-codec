@@ -5,5 +5,9 @@
   },
   "quantizer": {
     "kappa": 2.0
+  },
+  "data": {
+    "split": "train",
+    "frame_stride": 30
   }
 }

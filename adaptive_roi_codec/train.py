@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -18,7 +17,11 @@ from adaptive_roi_codec.model.roi_detector import ROIDetector
 from adaptive_roi_codec.model.vae_codec import VAECodec
 from adaptive_roi_codec.utils.config import load_yaml, merge_dicts
 from adaptive_roi_codec.utils.env import load_project_env, optional_env, s3_mount_root
-from adaptive_roi_codec.utils.kvasir_loader import SyntheticFrameDataset, discover_videos
+from adaptive_roi_codec.utils.kvasir_loader import (
+    KvasirVideoFrameDataset,
+    SyntheticFrameDataset,
+    collate_frame_samples,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,8 +60,8 @@ def resolve_dataset_root(config: dict) -> Path:
         logger.info("Using S3 mount dataset root: %s", root)
         return root
 
-    local_root = Path(data_cfg.get("local_root", "data/kvasir-capsule"))
-    logger.info("Using local dataset root: %s", local_root)
+    local_root = Path(data_cfg.get("local_root", "kvasir-capsule"))
+    logger.info("Using local dataset root: %s", local_root.resolve())
     return local_root
 
 
@@ -66,11 +69,12 @@ def resolve_checkpoint_dir(config: dict) -> Path:
     ckpt_cfg = config.get("checkpoints", {})
     connector_id = optional_env("S3_CONNECTOR_ID", ckpt_cfg.get("s3_connector_id", ""))
     subdir = ckpt_cfg.get("subdir", "checkpoints")
+    experiment_id = config.get("experiment_id", "default")
 
     if connector_id and _s3_mount_available(connector_id):
-        path = s3_mount_root(connector_id) / subdir
+        path = s3_mount_root(connector_id) / subdir / experiment_id
     else:
-        path = Path(ckpt_cfg.get("local_dir", "checkpoints"))
+        path = Path(ckpt_cfg.get("local_dir", "checkpoints")) / experiment_id
 
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -79,27 +83,43 @@ def resolve_checkpoint_dir(config: dict) -> Path:
 def build_dataloader(config: dict, dry_run: bool) -> DataLoader:
     training = config["training"]
     data_cfg = config.get("data", {})
+    model_cfg = config["model"]
     batch_size = training["batch_size"]
+    width, height = model_cfg["input_res"]
 
     if dry_run or optional_env("TRAIN_DRY_RUN", "").lower() in {"1", "true", "yes"}:
-        debug_res = data_cfg.get("debug_res", [640, 384])
         dataset = SyntheticFrameDataset(
             length=data_cfg.get("dry_run_samples", 4),
-            height=debug_res[1],
-            width=debug_res[0],
+            height=height,
+            width=width,
         )
-        logger.warning("Dry-run mode: using %sx%s synthetic frames", debug_res[0], debug_res[1])
+        logger.warning("Dry-run mode: using %sx%s synthetic frames", width, height)
         return DataLoader(dataset, batch_size=min(batch_size, 2), shuffle=True, num_workers=0)
 
     root = resolve_dataset_root(config)
-    discover_videos(root)
-    dataset = SyntheticFrameDataset(length=64)
-    logger.warning(
-        "Frame extraction pipeline is not implemented yet; "
-        "using synthetic frames while verifying video index at %s",
+    dataset = KvasirVideoFrameDataset(
         root,
+        split=data_cfg.get("split", "train"),
+        frame_stride=int(data_cfg.get("frame_stride", 30)),
+        max_frames_per_video=data_cfg.get("max_frames_per_video"),
+        height=height,
+        width=width,
+        video_subdir=data_cfg.get("video_subdir"),
+        splits_subdir=data_cfg.get("splits_subdir", "splits"),
     )
-    return DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+    logger.info(
+        "Using Kvasir video loader: split=%s stride=%s videos=%s",
+        data_cfg.get("split", "train"),
+        data_cfg.get("frame_stride", 30),
+        len(dataset.videos),
+    )
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=int(data_cfg.get("num_workers", 0)),
+        collate_fn=collate_frame_samples,
+    )
 
 
 def save_checkpoint(
@@ -139,6 +159,8 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
     model_cfg = config["model"]
     training_cfg = config["training"]
     quant_cfg = config["quantizer"]
+    width, height = model_cfg["input_res"]
+    logger.info("Training resolution: %sx%s", width, height)
 
     roi_detector = ROIDetector(input_size=config["roi_detector"]["input_res"]).to(device)
     codec = VAECodec(latent_channels=model_cfg["latent_ch"]).to(device)
@@ -172,27 +194,48 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
         roi_detector.train()
         epoch_loss = 0.0
         batches = 0
-        prev_frame: torch.Tensor | None = None
         prev_recon: torch.Tensor | None = None
         prev_z: torch.Tensor | None = None
 
         for batch in loader:
-            frame = batch.to(device)
-            mask = roi_detector(frame)
-            outputs = codec(frame, prev_recon=prev_recon, prev_z=prev_z)
-            outputs["z"] = quantizer.quantize(outputs["z"], mask)
-            losses = loss_fn(outputs, frame, mask, prev_frame, prev_recon)
+            if isinstance(batch, torch.Tensor):
+                samples = [(batch[i : i + 1], None) for i in range(batch.size(0))]
+            else:
+                frames = batch["frame"]
+                prev_frames = batch["prev_frame"]
+                has_prev = batch["has_prev"]
+                samples = [
+                    (
+                        frames[i : i + 1],
+                        prev_frames[i : i + 1] if bool(has_prev[i].item()) else None,
+                    )
+                    for i in range(frames.size(0))
+                ]
 
-            optimizer.zero_grad(set_to_none=True)
-            losses["total"].backward()
-            optimizer.step()
+            for frame, prev_frame in samples:
+                frame = frame.to(device)
+                if prev_frame is not None:
+                    prev_frame = prev_frame.to(device)
+                else:
+                    prev_recon = None
+                    prev_z = None
 
-            epoch_loss += float(losses["total"].item())
-            batches += 1
-            prev_frame = frame.detach()
-            prev_recon = outputs["recon"].detach()
-            prev_z = outputs["z"].detach()
+                mask = roi_detector(frame)
+                outputs = codec(frame, prev_recon=prev_recon, prev_z=prev_z)
+                outputs["z"] = quantizer.quantize(outputs["z"], mask)
+                losses = loss_fn(outputs, frame, mask, prev_frame, prev_recon)
 
+                optimizer.zero_grad(set_to_none=True)
+                losses["total"].backward()
+                optimizer.step()
+
+                epoch_loss += float(losses["total"].item())
+                batches += 1
+                prev_recon = outputs["recon"].detach()
+                prev_z = outputs["z"].detach()
+
+                if dry_run:
+                    break
             if dry_run:
                 break
 

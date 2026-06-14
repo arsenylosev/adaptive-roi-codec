@@ -64,7 +64,7 @@ Training must not download the full dataset or checkpoints to the local machine.
 
 - Operators must configure Yandex Cloud CLI, DataSphere project, and S3 connector before the first job.
 - Generated job configs live under `jobs/configs/.generated/` and must not be committed.
-- Video frame extraction and full 1920×1080 training loop remain follow-up work; the current scaffold validates job submission and end-to-end tensor plumbing.
+- Video frame extraction and real Kvasir loader are implemented; see [ADR-002](ADR-002-native-336-training-resolution.md) for 336×336 training resolution.
 - Future ADRs should cover ROI detector supervision, entropy coding, and CPU inference benchmarking separately.
 
 ## References

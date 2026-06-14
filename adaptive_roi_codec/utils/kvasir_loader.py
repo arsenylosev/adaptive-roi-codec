@@ -1,26 +1,31 @@
-"""Kvasir-Capsule dataset loader (Object Storage / local debug paths)."""
+"""Kvasir-Capsule dataset loader for 336×336 capsule endoscopy videos."""
 
 from __future__ import annotations
 
+import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
+import cv2
 import torch
 from torch.utils.data import Dataset, IterableDataset
 
+logger = logging.getLogger(__name__)
 
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
+DEFAULT_FRAME_SIZE = 336
 
 
 def discover_videos(root: Path) -> list[Path]:
     if not root.exists():
         raise FileNotFoundError(
-            f"Dataset root not found: {root}. "
-            "Upload Kvasir-Capsule to Object Storage and mount it via s3-mounts."
+            f"Video directory not found: {root}. "
+            "Upload Kvasir-Capsule to Object Storage under kvasir-capsule/raw/labelled_videos/."
         )
     videos = sorted(
         path
-        for path in root.rglob("*")
+        for path in root.iterdir()
         if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS
     )
     if not videos:
@@ -28,10 +33,81 @@ def discover_videos(root: Path) -> list[Path]:
     return videos
 
 
+def resolve_video_dir(dataset_root: Path, video_subdir: str | None = None) -> Path:
+    """Resolve labelled video directory across local and S3 raw layouts."""
+    candidates: list[Path] = []
+    if video_subdir:
+        candidates.append(dataset_root / video_subdir)
+    candidates.extend(
+        [
+            dataset_root / "raw" / "labelled_videos",
+            dataset_root / "labelled_videos",
+            dataset_root / "processed" / "videos",
+        ]
+    )
+    for path in candidates:
+        if path.is_dir() and any(path.glob("*.mp4")):
+            return path
+    raise FileNotFoundError(
+        f"No labelled videos found under {dataset_root}. Tried: "
+        + ", ".join(str(p) for p in candidates)
+    )
+
+
+def resolve_splits_dir(dataset_root: Path, splits_subdir: str = "splits") -> Path:
+    return dataset_root / splits_subdir
+
+
+def load_video_ids(split_file: Path) -> list[str]:
+    if not split_file.exists():
+        raise FileNotFoundError(
+            f"Split file not found: {split_file}. "
+            "Run: uv run build-dataset-manifest --dataset-root <path>"
+        )
+    ids: list[str] = []
+    for line in split_file.read_text(encoding="utf-8").splitlines():
+        value = line.strip()
+        if value and not value.startswith("#"):
+            ids.append(value)
+    return ids
+
+
+def filter_videos(videos: list[Path], video_ids: list[str] | None) -> list[Path]:
+    if not video_ids:
+        return videos
+    allowed = set(video_ids)
+    filtered = [path for path in videos if path.stem in allowed]
+    if not filtered:
+        raise FileNotFoundError("No videos matched the requested split IDs")
+    return filtered
+
+
+def frame_to_tensor(frame_bgr, height: int, width: int) -> torch.Tensor:
+    if frame_bgr is None:
+        raise ValueError("Received empty frame from video decoder")
+    rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    if rgb.shape[0] != height or rgb.shape[1] != width:
+        rgb = cv2.resize(rgb, (width, height), interpolation=cv2.INTER_AREA)
+    return torch.from_numpy(rgb).permute(2, 0, 1).contiguous().float() / 255.0
+
+
+@dataclass(frozen=True)
+class FrameSample:
+    frame: torch.Tensor
+    prev_frame: torch.Tensor | None
+    video_id: str
+    frame_index: int
+
+
 class SyntheticFrameDataset(Dataset[torch.Tensor]):
     """Lightweight dataset for smoke tests when real frames are unavailable."""
 
-    def __init__(self, length: int = 64, height: int = 1080, width: int = 1920) -> None:
+    def __init__(
+        self,
+        length: int = 64,
+        height: int = DEFAULT_FRAME_SIZE,
+        width: int = DEFAULT_FRAME_SIZE,
+    ) -> None:
         self.length = length
         self.height = height
         self.width = width
@@ -44,8 +120,103 @@ class SyntheticFrameDataset(Dataset[torch.Tensor]):
         return torch.rand(3, self.height, self.width, generator=generator)
 
 
+class KvasirVideoFrameDataset(IterableDataset[FrameSample]):
+    """Stream consecutive 336×336 frames from Kvasir-Capsule videos."""
+
+    def __init__(
+        self,
+        dataset_root: Path,
+        *,
+        split: str = "train",
+        frame_stride: int = 30,
+        max_frames_per_video: int | None = None,
+        height: int = DEFAULT_FRAME_SIZE,
+        width: int = DEFAULT_FRAME_SIZE,
+        video_subdir: str | None = None,
+        splits_subdir: str = "splits",
+        video_ids: list[str] | None = None,
+    ) -> None:
+        self.dataset_root = dataset_root
+        self.split = split
+        self.frame_stride = max(frame_stride, 1)
+        self.max_frames_per_video = max_frames_per_video
+        self.height = height
+        self.width = width
+        self.video_dir = resolve_video_dir(dataset_root, video_subdir)
+        if video_ids is None and split:
+            split_file = resolve_splits_dir(dataset_root, splits_subdir) / f"{split}_videos.txt"
+            if split_file.exists():
+                video_ids = load_video_ids(split_file)
+        self.videos = filter_videos(discover_videos(self.video_dir), video_ids)
+
+    def __iter__(self) -> Iterator[FrameSample]:
+        worker_info = torch.utils.data.get_worker_info()
+        videos = self.videos
+        if worker_info is not None:
+            videos = videos[worker_info.id :: worker_info.num_workers]
+
+        for video_path in videos:
+            yield from self._iter_video(video_path)
+
+    def _iter_video(self, video_path: Path) -> Iterator[FrameSample]:
+        capture = cv2.VideoCapture(str(video_path))
+        if not capture.isOpened():
+            logger.warning("Skipping unreadable video: %s", video_path)
+            return
+
+        prev_tensor: torch.Tensor | None = None
+        frame_index = 0
+        yielded = 0
+
+        try:
+            while True:
+                ok, frame_bgr = capture.read()
+                if not ok:
+                    break
+
+                if frame_index % self.frame_stride == 0:
+                    tensor = frame_to_tensor(frame_bgr, self.height, self.width)
+                    yield FrameSample(
+                        frame=tensor,
+                        prev_frame=prev_tensor,
+                        video_id=video_path.stem,
+                        frame_index=frame_index,
+                    )
+                    prev_tensor = tensor.detach()
+                    yielded += 1
+                    if self.max_frames_per_video and yielded >= self.max_frames_per_video:
+                        break
+
+                frame_index += 1
+        finally:
+            capture.release()
+
+
+def collate_frame_samples(batch: list[FrameSample]) -> dict[str, torch.Tensor | list[str]]:
+    frames = torch.stack([sample.frame for sample in batch])
+    prev_frames = torch.stack(
+        [
+            sample.prev_frame
+            if sample.prev_frame is not None
+            else torch.zeros_like(sample.frame)
+            for sample in batch
+        ]
+    )
+    has_prev = torch.tensor(
+        [sample.prev_frame is not None for sample in batch],
+        dtype=torch.bool,
+    )
+    return {
+        "frame": frames,
+        "prev_frame": prev_frames,
+        "has_prev": has_prev,
+        "video_id": [sample.video_id for sample in batch],
+        "frame_index": torch.tensor([sample.frame_index for sample in batch]),
+    }
+
+
 class VideoIndexDataset(Dataset[Path]):
-    """Index of capsule endoscopy videos for frame extraction pipelines."""
+    """Index of capsule endoscopy videos."""
 
     def __init__(self, root: Path) -> None:
         self.videos = discover_videos(root)

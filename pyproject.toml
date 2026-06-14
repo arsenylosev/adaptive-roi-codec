@@ -24,6 +24,7 @@ dev = [
 
 [project.scripts]
 launch-train = "adaptive_roi_codec.jobs.launch:main"
+build-dataset-manifest = "adaptive_roi_codec.cli.build_dataset_manifest:main"
 
 [build-system]
 requires = ["hatchling"]
