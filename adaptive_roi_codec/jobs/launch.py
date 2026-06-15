@@ -62,6 +62,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Call `datasphere project job execute` after rendering",
     )
+    parser.add_argument(
+        "--sync",
+        action="store_true",
+        help="Block until the job finishes (default: submit with --async and return)",
+    )
+    parser.add_argument(
+        "--async-output",
+        type=Path,
+        default=GENERATED_DIR / "last_job_execute.json",
+        help="Path for datasphere --async -o metadata (default: jobs/configs/.generated/last_job_execute.json)",
+    )
     return parser.parse_args()
 
 
@@ -105,7 +116,13 @@ def write_generated_config(content: str, config_name: str) -> Path:
     return output_path
 
 
-def execute_job(project_id: str, config_path: Path) -> None:
+def execute_job(
+    project_id: str,
+    config_path: Path,
+    *,
+    async_mode: bool = True,
+    async_output: Path | None = None,
+) -> None:
     cmd = [
         "datasphere",
         "project",
@@ -116,8 +133,19 @@ def execute_job(project_id: str, config_path: Path) -> None:
         "-c",
         str(config_path),
     ]
+    if async_mode:
+        output_path = async_output or (GENERATED_DIR / "last_job_execute.json")
+        GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+        cmd.extend(["--async", "-o", str(output_path)])
+        logger.info("Submitting job asynchronously; metadata will be written to %s", output_path)
     logger.info("Running: %s", " ".join(cmd))
     subprocess.run(cmd, cwd=REPO_ROOT, check=True)
+    if async_mode:
+        logger.info(
+            "Job submitted. Track progress in DataSphere UI → Jobs → Run history, "
+            "or inspect %s",
+            async_output or (GENERATED_DIR / "last_job_execute.json"),
+        )
 
 
 def main() -> None:
@@ -141,7 +169,12 @@ def main() -> None:
         return
 
     if args.execute:
-        execute_job(context["DATASPHERE_PROJECT_ID"], config_path)
+        execute_job(
+            context["DATASPHERE_PROJECT_ID"],
+            config_path,
+            async_mode=not args.sync,
+            async_output=args.async_output,
+        )
         return
 
     logger.info(

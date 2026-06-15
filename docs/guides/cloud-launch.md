@@ -290,10 +290,16 @@ uv run launch-train --dry-run
 # Review jobs/configs/.generated/job_train.yaml
 ```
 
-Submit:
+Submit (returns immediately; track in DataSphere UI → **Jobs → Run history**):
 
 ```bash
 uv run launch-train --execute
+```
+
+Async metadata is written to `jobs/configs/.generated/last_job_execute.json`. To block until the job finishes:
+
+```bash
+uv run launch-train --execute --sync
 ```
 
 First run recommendation: set `"epochs": 1` in `train_input.json` to validate the full cloud path before a 50-epoch job.
@@ -321,10 +327,12 @@ Run separate jobs with distinct `experiment_id` values:
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
+| **`Project disk not created yet. Open project to create it.`** | Job requests `attach-project-disk` but the project was never opened in JupyterLab | Open the DataSphere project in JupyterLab once and wait for it to finish loading; **or** remove `attach-project-disk` from the job config if you only use S3 mounts (this repo’s training job does not need project disk) |
 | **`SignatureDoesNotMatch` on upload** | Missing/wrong `AWS_DEFAULT_REGION`, swapped key ID/secret, or `uvx` without env | Use **`yc storage s3 cp`** (Option A), or export `AWS_DEFAULT_REGION=ru-central1` + run preflight test (Option B) |
 | **`AccessDenied`** | Service account lacks `storage.editor` | Assign role on folder/bucket in IAM |
 | `Video directory not found` | Wrong S3 prefix layout | Upload under `kvasir-capsule/raw/labelled_videos/` |
 | `Split file not found` | Missing splits on S3 | Upload `splits/` or run manifest builder before upload |
+| **`--config: command not found`** in job stderr | Multiline `cmd` in job YAML split into separate shell lines | Use a single-line `cmd` in `job_train.yaml.template` (fixed in repo) |
 | Job fails on import cv2 | OpenCV missing in venv | Run `uv sync` before `launch-train --execute` (`python: auto`) |
 | OOM on V100 | batch 4 at full stride | Lower `batch_size` or increase `frame_stride` |
 

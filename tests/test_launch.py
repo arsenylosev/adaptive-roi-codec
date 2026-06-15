@@ -25,7 +25,10 @@ def test_rendered_job_config_is_valid_yaml_with_required_sections(tmp_path: Path
     assert config["name"] == "test-train"
     assert config["s3-mounts"] == ["connector-test"]
     assert "g1.1" in config["cloud-instance-types"]
-    assert "python -m adaptive_roi_codec.train" in config["cmd"]
+    assert config["cmd"] == (
+        "python -m adaptive_roi_codec.train --config ${CONFIG} --params ${PARAMS}"
+    )
+    assert "\n" not in config["cmd"]
 
 
 def test_write_generated_config_persists_file(tmp_path: Path, monkeypatch) -> None:

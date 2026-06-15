@@ -1,10 +1,7 @@
 name: ${JOB_NAME}
 desc: ${JOB_DESC}
 
-cmd: >
-  python -m adaptive_roi_codec.train
-    --config ${CONFIG}
-    --params ${PARAMS}
+cmd: python -m adaptive_roi_codec.train --config ${CONFIG} --params ${PARAMS}
 
 env:
   python: auto
@@ -24,9 +21,6 @@ outputs:
 
 s3-mounts:
   - ${S3_CONNECTOR_ID}
-
-flags:
-  - attach-project-disk
 
 cloud-instance-types:
   - g1.1
