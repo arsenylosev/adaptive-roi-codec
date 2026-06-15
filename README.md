@@ -98,5 +98,6 @@ Commit messages follow [Conventional Commits](CONTRIBUTING.md) (`feat:`, `fix:`,
 ## References
 
 - [Cloud launch guide](docs/guides/cloud-launch.md)
+- [DataSphere S3 connector setup](docs/guides/datasphere-s3-connector.md)
 - [MCE-Experiment-Requirements-EN.md](MCE-Experiment-Requirements-EN.md)
 - [DataSphere Jobs](https://yandex.cloud/en/docs/datasphere/concepts/jobs/)

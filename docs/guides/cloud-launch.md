@@ -181,21 +181,32 @@ Training resolves videos at `/job/s3/<connector>/kvasir-capsule/raw/labelled_vid
 
 ## 4. DataSphere S3 connector
 
-1. Open your DataSphere project → **Create resource → S3 connector**
-2. Endpoint: `https://storage.yandexcloud.net`
-3. Bucket: your bucket name (no dots in the name)
-4. Mode: **Read and write** (checkpoints)
-5. **Activate** the connector
-6. Copy connector ID → `S3_CONNECTOR_ID` in `.env`
+Full walkthrough (service account, static keys, DataSphere Secret, activation, and how to find `S3_CONNECTOR_ID`):
 
-On the worker, data appears at:
+**[DataSphere S3 connector setup](datasphere-s3-connector.md)**
+
+Short checklist:
+
+1. Create a **service account** and assign **`storage.editor`** on the folder or bucket.
+2. Run `yc iam access-key create` — save **`key_id`** and **`secret`** (shown once).
+3. In the DataSphere project, create a **Secret** with the `secret` value.
+4. **Project resources → S3 Connector → Create:**
+   - Endpoint: `https://storage.yandexcloud.net/`
+   - Bucket: your bucket name (no dots)
+   - Static access key ID: the `key_id` (not the IAM record `id`)
+   - Static access key: select the Secret from step 3
+   - Mode: **Read and write**
+5. **Activate** the connector.
+6. Copy the connector’s **resource ID** → `S3_CONNECTOR_ID` in `.env`.
+
+On the job worker, data appears at:
 
 ```
 /job/s3/<S3_CONNECTOR_ID>/kvasir-capsule/raw/labelled_videos/
 /job/s3/<S3_CONNECTOR_ID>/checkpoints/<experiment_id>/
 ```
 
-Docs: [S3 connector](https://yandex.cloud/en/docs/datasphere/operations/data/s3-connectors)
+Official docs: [S3 connector](https://yandex.cloud/en/docs/datasphere/operations/data/s3-connectors), [Jobs `s3-mounts`](https://yandex.cloud/en/docs/datasphere/concepts/jobs/)
 
 ## 5. Configure environment
 
