@@ -1,5 +1,6 @@
 """Tests for Datasphere job config rendering."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,9 @@ import yaml
 
 from adaptive_roi_codec.jobs.launch import (
     EXTRACT_TEMPLATE,
+    format_train_job_desc,
+    format_train_job_name,
+    materialize_train_params,
     params_input_path,
     render_template,
     resolve_datasphere_cli,
@@ -23,6 +27,7 @@ def test_rendered_job_config_is_valid_yaml_with_required_sections(tmp_path: Path
         "JOB_NAME": yaml_quote("test-train"),
         "JOB_DESC": yaml_quote("unit test job"),
         "PARAMS_INPUT": "jobs/inputs/train_smoke.json",
+        "TRAIN_BATCH_SIZE": "12",
         "S3_CONNECTOR_ID": "connector-test",
         "S3_DATA_PREFIX": "kvasir-capsule",
         "S3_CHECKPOINT_SUBDIR": "checkpoints",
@@ -40,6 +45,35 @@ def test_rendered_job_config_is_valid_yaml_with_required_sections(tmp_path: Path
     )
     assert "\n" not in config["cmd"]
     assert config["inputs"][1] == {"jobs/inputs/train_smoke.json": "PARAMS"}
+    env_vars = {}
+    for item in config["env"]["vars"]:
+        env_vars.update(item)
+    assert str(env_vars["TRAIN_BATCH_SIZE"]) == "12"
+
+
+def test_materialize_train_params_writes_batch_size_override(tmp_path: Path, monkeypatch) -> None:
+    from adaptive_roi_codec.jobs import launch as launch_module
+
+    params_path = tmp_path / "base.json"
+    params_path.write_text(
+        json.dumps({"training": {"epochs": 1}, "data": {"source": "preprocessed"}}),
+        encoding="utf-8",
+    )
+    generated_dir = tmp_path / "generated"
+    monkeypatch.setattr(launch_module, "GENERATED_DIR", generated_dir)
+    monkeypatch.setattr(launch_module, "GENERATED_TRAIN_PARAMS", generated_dir / "train_params.json")
+
+    rendered = materialize_train_params(params_path, 16)
+    payload = json.loads(rendered.read_text(encoding="utf-8"))
+
+    assert rendered.name == "train_params.json"
+    assert payload["training"]["batch_size"] == 16
+
+
+def test_train_job_name_and_desc_include_batch_size() -> None:
+    assert format_train_job_name("vae-capsule-train", 12) == "vae-capsule-train-bs12"
+    assert format_train_job_desc("GPU training", 12) == "GPU training (batch_size=12)"
+    assert format_train_job_name("vae-capsule-train", None) == "vae-capsule-train"
 
 
 def test_params_input_path_must_be_inside_repo(tmp_path: Path) -> None:

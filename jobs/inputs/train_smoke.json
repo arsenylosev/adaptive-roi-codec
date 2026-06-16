@@ -2,6 +2,7 @@
   "experiment_id": "baseline-kappa-2.0",
   "training": {
     "epochs": 1,
+    "batch_size": 12,
     "log_every_batches": 10
   },
   "quantizer": {

@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from adaptive_roi_codec.losses.ssim import ssim_soft
 from adaptive_roi_codec.utils.metrics import psnr
@@ -51,14 +50,17 @@ class ClinicalLoss(nn.Module):
         frame: torch.Tensor,
         prev_frame: torch.Tensor | None,
         warped_prev: torch.Tensor | None,
+        temporal_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if prev_recon is None or prev_frame is None or warped_prev is None:
             return torch.zeros((), device=recon.device)
-        recon_diff = recon - prev_recon
-        frame_diff = frame - prev_frame
-        motion_term = F.mse_loss(recon_diff, frame_diff)
-        warp_term = F.mse_loss(warped_prev, prev_recon)
-        return motion_term + warp_term
+        motion_term = ((recon - prev_recon) - (frame - prev_frame)).pow(2).mean(dim=(1, 2, 3))
+        warp_term = (warped_prev - prev_recon).pow(2).mean(dim=(1, 2, 3))
+        per_sample = motion_term + warp_term
+        if temporal_mask is not None:
+            mask = temporal_mask.float()
+            return (per_sample * mask).sum() / mask.sum().clamp_min(1.0)
+        return per_sample.mean()
 
     def forward(
         self,
@@ -67,6 +69,7 @@ class ClinicalLoss(nn.Module):
         mask: torch.Tensor,
         prev_frame: torch.Tensor | None = None,
         prev_recon: torch.Tensor | None = None,
+        temporal_mask: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         recon = outputs["recon"]
         base = self.l_base(recon, target)
@@ -78,6 +81,7 @@ class ClinicalLoss(nn.Module):
             target,
             prev_frame,
             outputs.get("warped_prev"),
+            temporal_mask=temporal_mask,
         )
         total = (
             base

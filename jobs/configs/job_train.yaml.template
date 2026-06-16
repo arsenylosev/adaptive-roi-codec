@@ -22,6 +22,7 @@ env:
     - FRAMES_OUTPUT_DIR: ${FRAMES_S3_DIR}
     - TRAIN_METRICS_PATH: metrics/train_metrics.json
     - DATASPHERE_LOCAL_CHECKPOINT_DIR: /servant/jobs/extended_working_storage/checkpoints
+    - TRAIN_BATCH_SIZE: ${TRAIN_BATCH_SIZE}
 
 inputs:
   - configs/base.yaml: CONFIG

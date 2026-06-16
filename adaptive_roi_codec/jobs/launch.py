@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_TEMPLATE = REPO_ROOT / "jobs" / "configs" / "job_train.yaml.template"
 EXTRACT_TEMPLATE = REPO_ROOT / "jobs" / "configs" / "job_extract_frames.yaml.template"
 GENERATED_DIR = REPO_ROOT / "jobs" / "configs" / ".generated"
+GENERATED_TRAIN_PARAMS = GENERATED_DIR / "train_params.json"
+DEFAULT_TRAIN_JOB_NAME = "vae-capsule-train"
 
 
 def parse_args() -> argparse.Namespace:
@@ -49,6 +51,13 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=REPO_ROOT / "jobs" / "inputs" / "train_input.json",
         help="JSON file passed to the training script as job input",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Override training.batch_size in job params (written to jobs/configs/.generated/train_params.json)",
     )
     parser.add_argument(
         "--config-name",
@@ -118,6 +127,41 @@ def validate_inputs(params_path: Path) -> None:
         json.load(handle)
 
 
+def load_params(params_path: Path) -> dict:
+    with params_path.open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def resolve_batch_size(params_path: Path, cli_batch_size: int | None) -> int | None:
+    if cli_batch_size is not None:
+        return cli_batch_size
+    batch_size = load_params(params_path).get("training", {}).get("batch_size")
+    return int(batch_size) if batch_size is not None else None
+
+
+def materialize_train_params(params_path: Path, batch_size: int | None) -> Path:
+    if batch_size is None:
+        return params_path
+    params = load_params(params_path)
+    params.setdefault("training", {})["batch_size"] = batch_size
+    GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+    GENERATED_TRAIN_PARAMS.write_text(json.dumps(params, indent=2) + "\n", encoding="utf-8")
+    logger.info("Rendered train params with batch_size=%s: %s", batch_size, GENERATED_TRAIN_PARAMS)
+    return GENERATED_TRAIN_PARAMS
+
+
+def format_train_job_name(base_name: str, batch_size: int | None) -> str:
+    if batch_size is None:
+        return base_name
+    return f"{base_name}-bs{batch_size}"
+
+
+def format_train_job_desc(base_desc: str, batch_size: int | None) -> str:
+    if batch_size is None:
+        return base_desc
+    return f"{base_desc} (batch_size={batch_size})"
+
+
 def params_input_path(params_path: Path) -> str:
     """Return repo-relative path for DataSphere job inputs."""
     resolved = params_path.resolve()
@@ -136,23 +180,30 @@ def build_context(args: argparse.Namespace) -> dict[str, str]:
     s3_prefix = os.getenv("S3_DATA_PREFIX", "kvasir-capsule")
     frames_mount = f"/job/s3/{s3_connector_id}/{s3_prefix}/processed/frames"
 
+    batch_size = None
     if args.job == "extract":
         job_name = os.getenv("DATASPHERE_EXTRACT_JOB_NAME", "kvasir-extract-frames")
         job_desc = os.getenv(
             "DATASPHERE_EXTRACT_JOB_DESC",
             "CPU stage-1: decode Kvasir MP4s to .pt tensors on S3",
         )
+        params_path = args.params
     else:
-        job_name = os.getenv("DATASPHERE_JOB_NAME", "vae-capsule-train")
-        job_desc = os.getenv(
+        base_name = os.getenv("DATASPHERE_JOB_NAME", DEFAULT_TRAIN_JOB_NAME)
+        base_desc = os.getenv(
             "DATASPHERE_JOB_DESC",
             "VAE codec training on Kvasir-Capsule with adaptive ROI quantization",
         )
+        batch_size = resolve_batch_size(args.params, args.batch_size)
+        params_path = materialize_train_params(args.params, args.batch_size)
+        job_name = format_train_job_name(base_name, batch_size)
+        job_desc = format_train_job_desc(base_desc, batch_size)
 
     return {
         "JOB_NAME": yaml_quote(job_name),
         "JOB_DESC": yaml_quote(job_desc),
-        "PARAMS_INPUT": params_input_path(args.params),
+        "PARAMS_INPUT": params_input_path(params_path),
+        "TRAIN_BATCH_SIZE": str(batch_size) if batch_size is not None else "",
         "DATASPHERE_PROJECT_ID": project_id,
         "S3_CONNECTOR_ID": s3_connector_id,
         "S3_DATA_PREFIX": s3_prefix,
@@ -225,6 +276,8 @@ def main() -> None:
         )
 
     validate_inputs(args.params)
+    if args.job == "train" and args.batch_size is not None and args.batch_size < 1:
+        raise SystemExit("--batch-size must be >= 1")
     context = build_context(args)
     rendered = render_template(args.template, context)
     config_path = write_generated_config(rendered, args.config_name)

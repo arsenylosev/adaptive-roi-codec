@@ -219,6 +219,44 @@ def write_metrics_file(metrics_path: Path, metrics: dict[str, float]) -> None:
     logger.info("Wrote metrics to %s", metrics_path)
 
 
+def _build_video_prev_tensors(
+    batch: dict,
+    video_states: dict[str, tuple[torch.Tensor, torch.Tensor]],
+    device: torch.device,
+    *,
+    latent_channels: int,
+    latent_h: int,
+    latent_w: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    frames = batch["frame"]
+    batch_size = frames.size(0)
+    _, _, height, width = frames.shape
+
+    prev_recon = torch.zeros(batch_size, 3, height, width, device=device, dtype=frames.dtype)
+    prev_z = torch.zeros(
+        batch_size,
+        latent_channels,
+        latent_h,
+        latent_w,
+        device=device,
+        dtype=frames.dtype,
+    )
+    has_state = torch.zeros(batch_size, dtype=torch.bool, device=device)
+
+    for index, video_id in enumerate(batch["video_id"]):
+        if not bool(batch["has_prev"][index].item()):
+            continue
+        state = video_states.get(video_id)
+        if state is None:
+            continue
+        recon_state, z_state = state
+        prev_recon[index] = recon_state
+        prev_z[index] = z_state
+        has_state[index] = True
+
+    return prev_recon, prev_z, has_state
+
+
 def _train_batch(
     batch: dict,
     *,
@@ -229,41 +267,47 @@ def _train_batch(
     loss_fn: ClinicalLoss,
     optimizer: torch.optim.Optimizer,
     video_states: dict[str, tuple[torch.Tensor, torch.Tensor]],
+    latent_channels: int,
+    latent_h: int,
+    latent_w: int,
 ) -> float:
     frames = batch["frame"].to(device, non_blocking=True)
     prev_frames = batch["prev_frame"].to(device, non_blocking=True)
-    has_prev = batch["has_prev"]
     video_ids: list[str] = batch["video_id"]
-    batch_size = frames.size(0)
 
     optimizer.zero_grad(set_to_none=True)
-    batch_loss = 0.0
 
-    for index in range(batch_size):
-        frame = frames[index : index + 1]
-        video_id = video_ids[index]
-        use_prev = bool(has_prev[index].item())
+    prev_recon, prev_z, has_state = _build_video_prev_tensors(
+        batch,
+        video_states,
+        device,
+        latent_channels=latent_channels,
+        latent_h=latent_h,
+        latent_w=latent_w,
+    )
 
-        prev_frame = prev_frames[index : index + 1] if use_prev else None
-        prev_recon = None
-        prev_z = None
-        if use_prev and video_id in video_states:
-            recon_state, z_state = video_states[video_id]
-            prev_recon = recon_state.unsqueeze(0)
-            prev_z = z_state.unsqueeze(0)
+    mask = roi_detector(frames)
+    outputs = codec(frames, prev_recon=prev_recon, prev_z=prev_z)
+    outputs["z"] = quantizer.quantize(outputs["z"], mask)
+    losses = loss_fn(
+        outputs,
+        frames,
+        mask,
+        prev_frame=prev_frames,
+        prev_recon=prev_recon,
+        temporal_mask=has_state,
+    )
 
-        mask = roi_detector(frame)
-        outputs = codec(frame, prev_recon=prev_recon, prev_z=prev_z)
-        outputs["z"] = quantizer.quantize(outputs["z"], mask)
-        losses = loss_fn(outputs, frame, mask, prev_frame, prev_recon)
-
-        (losses["total"] / batch_size).backward()
-        batch_loss += float(losses["total"].item())
-
-        video_states[video_id] = (outputs["recon"].detach()[0], outputs["z"].detach()[0])
-
+    losses["total"].backward()
     optimizer.step()
-    return batch_loss / batch_size
+
+    for index, video_id in enumerate(video_ids):
+        video_states[video_id] = (
+            outputs["recon"].detach()[index],
+            outputs["z"].detach()[index],
+        )
+
+    return float(losses["total"].item())
 
 
 def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str, float]:
@@ -283,7 +327,16 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
     data_cfg = config.get("data", {})
     width, height = model_cfg["input_res"]
     log_every = int(training_cfg.get("log_every_batches", 20))
-    logger.info("Training resolution: %sx%s data.source=%s", width, height, data_cfg.get("source", "video"))
+    job_batch_size = optional_env("TRAIN_BATCH_SIZE", "")
+    if job_batch_size:
+        logger.info("Job TRAIN_BATCH_SIZE=%s", job_batch_size)
+    logger.info(
+        "Training resolution: %sx%s data.source=%s batch_size=%s",
+        width,
+        height,
+        data_cfg.get("source", "video"),
+        training_cfg["batch_size"],
+    )
 
     roi_detector = ROIDetector(input_size=config["roi_detector"]["input_res"]).to(device)
     codec = VAECodec(latent_channels=model_cfg["latent_ch"]).to(device)
@@ -339,6 +392,9 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
                     loss_fn=loss_fn,
                     optimizer=optimizer,
                     video_states=video_states,
+                    latent_channels=model_cfg["latent_ch"],
+                    latent_h=model_cfg["latent_h"],
+                    latent_w=model_cfg["latent_w"],
                 )
                 epoch_loss += avg_batch_loss
                 batches += 1
