@@ -2,9 +2,16 @@
 
 from pathlib import Path
 
+import pytest
 import yaml
 
-from adaptive_roi_codec.jobs.launch import render_template, write_generated_config
+from adaptive_roi_codec.jobs.launch import (
+    EXTRACT_TEMPLATE,
+    render_template,
+    resolve_datasphere_cli,
+    write_generated_config,
+    yaml_quote,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = REPO_ROOT / "jobs" / "configs" / "job_train.yaml.template"
@@ -12,11 +19,12 @@ TEMPLATE = REPO_ROOT / "jobs" / "configs" / "job_train.yaml.template"
 
 def test_rendered_job_config_is_valid_yaml_with_required_sections(tmp_path: Path) -> None:
     context = {
-        "JOB_NAME": "test-train",
-        "JOB_DESC": "unit test job",
+        "JOB_NAME": yaml_quote("test-train"),
+        "JOB_DESC": yaml_quote("unit test job"),
         "S3_CONNECTOR_ID": "connector-test",
         "S3_DATA_PREFIX": "kvasir-capsule",
         "S3_CHECKPOINT_SUBDIR": "checkpoints",
+        "FRAMES_S3_DIR": "/job/s3/connector-test/kvasir-capsule/processed/frames",
         "WORKING_STORAGE_GB": "150",
     }
     rendered = render_template(TEMPLATE, context)
@@ -29,6 +37,43 @@ def test_rendered_job_config_is_valid_yaml_with_required_sections(tmp_path: Path
         "python -m adaptive_roi_codec.train --config ${CONFIG} --params ${PARAMS}"
     )
     assert "\n" not in config["cmd"]
+
+
+def test_extract_job_description_with_colon_is_valid_yaml() -> None:
+    context = {
+        "JOB_NAME": yaml_quote("kvasir-extract-frames"),
+        "JOB_DESC": yaml_quote("CPU stage-1: decode Kvasir MP4s to .pt tensors on S3"),
+        "S3_CONNECTOR_ID": "connector-test",
+        "S3_DATA_PREFIX": "kvasir-capsule",
+        "FRAMES_S3_DIR": "/job/s3/connector-test/kvasir-capsule/processed/frames",
+        "WORKING_STORAGE_GB": "150",
+    }
+    config = yaml.safe_load(render_template(EXTRACT_TEMPLATE, context))
+    assert config["desc"] == "CPU stage-1: decode Kvasir MP4s to .pt tensors on S3"
+    assert config["cloud-instance-types"][0] == "c1.8"
+
+
+def test_resolve_datasphere_cli_from_venv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    cli = fake_bin / "datasphere"
+    cli.write_text("#!/bin/sh\n", encoding="utf-8")
+    cli.chmod(0o755)
+    monkeypatch.setattr("adaptive_roi_codec.jobs.launch.sys.executable", str(fake_bin / "python"))
+    monkeypatch.setattr("adaptive_roi_codec.jobs.launch.shutil.which", lambda _name: None)
+
+    assert resolve_datasphere_cli() == str(cli)
+
+
+def test_resolve_datasphere_cli_missing_exits_with_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "adaptive_roi_codec.jobs.launch.sys.executable",
+        "/nonexistent/python",
+    )
+    monkeypatch.setattr("adaptive_roi_codec.jobs.launch.shutil.which", lambda _name: None)
+
+    with pytest.raises(FileNotFoundError, match="uv sync --extra cloud"):
+        resolve_datasphere_cli()
 
 
 def test_write_generated_config_persists_file(tmp_path: Path, monkeypatch) -> None:

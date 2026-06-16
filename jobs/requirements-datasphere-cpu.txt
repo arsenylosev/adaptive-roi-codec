@@ -1,4 +1,3 @@
-# CPU-only jobs (frame extraction). No CUDA PyTorch — saves install time and disk.
 PyYAML==6.0.3
 python-dotenv==1.2.2
 numpy>=1.26,<3

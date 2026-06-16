@@ -6,6 +6,7 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -88,6 +89,28 @@ def render_template(template_path: Path, context: dict[str, str]) -> str:
     return Template(raw).safe_substitute(context)
 
 
+def yaml_quote(value: str) -> str:
+    """Return a YAML double-quoted scalar (safe for colons and spaces)."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    return f'"{escaped}"'
+
+
+def resolve_datasphere_cli() -> str:
+    """Return path to the datasphere CLI from the active Python environment."""
+    venv_candidate = Path(sys.executable).resolve().parent / "datasphere"
+    if venv_candidate.is_file():
+        return str(venv_candidate)
+
+    on_path = shutil.which("datasphere")
+    if on_path:
+        return on_path
+
+    raise FileNotFoundError(
+        "datasphere CLI not found. Install operator dependencies with:\n"
+        "  uv sync --extra cloud --extra dev"
+    )
+
+
 def validate_inputs(params_path: Path) -> None:
     if not params_path.exists():
         raise FileNotFoundError(f"Job params file not found: {params_path}")
@@ -116,8 +139,8 @@ def build_context(args: argparse.Namespace) -> dict[str, str]:
         )
 
     return {
-        "JOB_NAME": job_name,
-        "JOB_DESC": job_desc,
+        "JOB_NAME": yaml_quote(job_name),
+        "JOB_DESC": yaml_quote(job_desc),
         "DATASPHERE_PROJECT_ID": project_id,
         "S3_CONNECTOR_ID": s3_connector_id,
         "S3_DATA_PREFIX": s3_prefix,
@@ -143,8 +166,9 @@ def execute_job(
     async_mode: bool = True,
     async_output: Path | None = None,
 ) -> None:
+    datasphere_cli = resolve_datasphere_cli()
     cmd = [
-        "datasphere",
+        datasphere_cli,
         "project",
         "job",
         "execute",
@@ -198,6 +222,10 @@ def main() -> None:
         return
 
     if args.execute:
+        try:
+            resolve_datasphere_cli()
+        except FileNotFoundError as exc:
+            raise SystemExit(str(exc)) from exc
         execute_job(
             context["DATASPHERE_PROJECT_ID"],
             config_path,

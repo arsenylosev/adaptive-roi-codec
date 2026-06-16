@@ -8,6 +8,11 @@ env:
     type: manual
     version: "3.11"
     requirements-file: jobs/requirements-datasphere-gpu.txt
+    pip:
+      extra-index-urls:
+        - https://download.pytorch.org/whl/cu121
+    local-paths:
+      - adaptive_roi_codec
   vars:
     - PYTHONPATH: .
     - TRAIN_REQUIRE_CUDA: "1"
