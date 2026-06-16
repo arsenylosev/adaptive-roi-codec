@@ -12,85 +12,35 @@ import cv2
 import torch
 from torch.utils.data import Dataset, IterableDataset
 
+from adaptive_roi_codec.utils.frame_io import (
+    PREPROCESSED_MANIFEST,
+    frame_to_chw_numpy,
+    load_preprocessed_frame_array,
+)
+from adaptive_roi_codec.utils.video_index import (
+    DEFAULT_FRAME_SIZE,
+    VIDEO_EXTENSIONS,
+    discover_videos,
+    filter_videos,
+    load_video_ids,
+    resolve_splits_dir,
+    resolve_video_dir,
+)
+
 logger = logging.getLogger(__name__)
-
-VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
-DEFAULT_FRAME_SIZE = 336
-PREPROCESSED_MANIFEST = "frames_manifest.jsonl"
-
-
-def discover_videos(root: Path) -> list[Path]:
-    if not root.exists():
-        raise FileNotFoundError(
-            f"Video directory not found: {root}. "
-            "Upload Kvasir-Capsule to Object Storage under kvasir-capsule/raw/labelled_videos/."
-        )
-    videos = sorted(
-        path
-        for path in root.iterdir()
-        if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS
-    )
-    if not videos:
-        raise FileNotFoundError(f"No video files found under {root}")
-    return videos
-
-
-def resolve_video_dir(dataset_root: Path, video_subdir: str | None = None) -> Path:
-    """Resolve labelled video directory across local and S3 raw layouts."""
-    candidates: list[Path] = []
-    if video_subdir:
-        candidates.append(dataset_root / video_subdir)
-    candidates.extend(
-        [
-            dataset_root / "raw" / "labelled_videos",
-            dataset_root / "labelled_videos",
-            dataset_root / "processed" / "videos",
-        ]
-    )
-    for path in candidates:
-        if path.is_dir() and any(path.glob("*.mp4")):
-            return path
-    raise FileNotFoundError(
-        f"No labelled videos found under {dataset_root}. Tried: "
-        + ", ".join(str(p) for p in candidates)
-    )
-
-
-def resolve_splits_dir(dataset_root: Path, splits_subdir: str = "splits") -> Path:
-    return dataset_root / splits_subdir
-
-
-def load_video_ids(split_file: Path) -> list[str]:
-    if not split_file.exists():
-        raise FileNotFoundError(
-            f"Split file not found: {split_file}. "
-            "Run: uv run build-dataset-manifest --dataset-root <path>"
-        )
-    ids: list[str] = []
-    for line in split_file.read_text(encoding="utf-8").splitlines():
-        value = line.strip()
-        if value and not value.startswith("#"):
-            ids.append(value)
-    return ids
-
-
-def filter_videos(videos: list[Path], video_ids: list[str] | None) -> list[Path]:
-    if not video_ids:
-        return videos
-    allowed = set(video_ids)
-    filtered = [path for path in videos if path.stem in allowed]
-    if not filtered:
-        raise FileNotFoundError("No videos matched the requested split IDs")
-    return filtered
 
 
 def frame_to_tensor(frame_bgr, height: int, width: int) -> torch.Tensor:
-    if frame_bgr is None:
-        raise ValueError("Received empty frame from video decoder")
-    rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-    if rgb.shape[0] != height or rgb.shape[1] != width:
-        rgb = cv2.resize(rgb, (width, height), interpolation=cv2.INTER_AREA)
-    return torch.from_numpy(rgb).permute(2, 0, 1).contiguous().float() / 255.0
+    return torch.from_numpy(frame_to_chw_numpy(frame_bgr, height, width))
+
+
+def load_frame_tensor(path: Path) -> torch.Tensor:
+    suffix = path.suffix.lower()
+    if suffix == ".npy":
+        return torch.from_numpy(load_preprocessed_frame_array(path))
+    if suffix == ".pt":
+        return torch.load(path, map_location="cpu", weights_only=True)
+    raise ValueError(f"Unsupported preprocessed frame format: {path}")
 
 
 @dataclass(frozen=True)
@@ -259,7 +209,7 @@ def load_preprocessed_manifest(manifest_path: Path) -> list[FrameRecord]:
 
 
 class KvasirPreprocessedFrameDataset(Dataset[FrameSample]):
-    """Load 336×336 frames from pre-extracted `.pt` tensors (stage-1 output)."""
+    """Load 336×336 frames from pre-extracted `.npy` or legacy `.pt` caches (stage-1 output)."""
 
     def __init__(
         self,
@@ -293,10 +243,10 @@ class KvasirPreprocessedFrameDataset(Dataset[FrameSample]):
 
     def __getitem__(self, index: int) -> FrameSample:
         record = self.records[index]
-        tensor = torch.load(record.path, map_location="cpu", weights_only=True)
+        tensor = load_frame_tensor(record.path)
         prev = None
         if record.prev_path is not None:
-            prev = torch.load(record.prev_path, map_location="cpu", weights_only=True)
+            prev = load_frame_tensor(record.prev_path)
         return FrameSample(
             frame=tensor,
             prev_frame=prev,

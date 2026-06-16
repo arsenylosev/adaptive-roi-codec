@@ -8,15 +8,17 @@ import logging
 import sys
 from pathlib import Path
 
-import torch
-
 from adaptive_roi_codec.utils.config import load_yaml, merge_dicts
 from adaptive_roi_codec.utils.env import load_project_env, optional_env, s3_mount_root
-from adaptive_roi_codec.utils.kvasir_loader import (
+from adaptive_roi_codec.utils.frame_io import (
+    FRAME_CACHE_SUFFIX,
     PREPROCESSED_MANIFEST,
+    frame_to_chw_numpy,
+    save_preprocessed_frame,
+)
+from adaptive_roi_codec.utils.video_index import (
     discover_videos,
     filter_videos,
-    frame_to_tensor,
     load_video_ids,
     resolve_splits_dir,
     resolve_video_dir,
@@ -32,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Decode Kvasir MP4s to .pt frame tensors for fast GPU training"
+        description="Decode Kvasir MP4s to .npy frame caches for fast GPU training"
     )
     parser.add_argument("--config", required=True, help="YAML config (configs/base.yaml)")
     parser.add_argument("--params", required=False, help="JSON overrides")
@@ -120,9 +122,9 @@ def extract_split(
                         frame_index += 1
                         continue
 
-                    tensor = frame_to_tensor(frame_bgr, height, width)
-                    out_path = video_out / f"frame_{frame_index:06d}.pt"
-                    torch.save(tensor, out_path)
+                    tensor = frame_to_chw_numpy(frame_bgr, height, width)
+                    out_path = video_out / f"frame_{frame_index:06d}{FRAME_CACHE_SUFFIX}"
+                    save_preprocessed_frame(tensor, out_path)
 
                     row = {
                         "video_id": video_id,
