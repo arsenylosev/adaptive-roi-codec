@@ -129,8 +129,8 @@ def extract_split(
                     row = {
                         "video_id": video_id,
                         "frame_index": frame_index,
-                        "path": str(out_path.resolve()),
-                        "prev_path": str(prev_path.resolve()) if prev_path else None,
+                        "path": out_path.relative_to(output_root).as_posix(),
+                        "prev_path": prev_path.relative_to(output_root).as_posix() if prev_path else None,
                     }
                     manifest.write(json.dumps(row) + "\n")
                     manifest.flush()

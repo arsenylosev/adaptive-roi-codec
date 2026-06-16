@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import logging
+import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -165,6 +168,18 @@ def build_dataloader(config: dict, dry_run: bool, device: torch.device) -> DataL
     )
 
 
+def shutdown_dataloader(loader: DataLoader | None) -> None:
+    """Stop DataLoader worker processes so the job exits with status 0."""
+    if loader is None or loader.num_workers == 0:
+        return
+    iterator = getattr(loader, "_iterator", None)
+    if iterator is not None:
+        iterator._shutdown_workers()
+        loader._iterator = None
+    del loader
+    gc.collect()
+
+
 def save_checkpoint(
     path: Path,
     epoch: int,
@@ -180,8 +195,28 @@ def save_checkpoint(
         "optimizer": optimizer.state_dict(),
         "metrics": metrics,
     }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staging_root = optional_env("DATASPHERE_LOCAL_CHECKPOINT_DIR", "")
+    if staging_root:
+        local_path = Path(staging_root) / path.parent.name / path.name
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(payload, local_path)
+        shutil.copy2(local_path, path)
+        logger.info("Saved checkpoint to %s (via %s)", path, local_path)
+        return
+
     torch.save(payload, path)
     logger.info("Saved checkpoint to %s", path)
+
+
+def write_metrics_file(metrics_path: Path, metrics: dict[str, float]) -> None:
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    with metrics_path.open("w", encoding="utf-8") as handle:
+        json.dump(metrics, handle, indent=2)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    logger.info("Wrote metrics to %s", metrics_path)
 
 
 def _train_batch(
@@ -276,76 +311,81 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
 
     epochs = 1 if dry_run else training_cfg["epochs"]
     last_metrics: dict[str, float] = {}
-    video_states: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
 
-    for epoch in range(1, epochs + 1):
-        codec.train()
-        roi_detector.train()
-        epoch_loss = 0.0
-        batches = 0
-        epoch_start = time.perf_counter()
+    try:
+        for epoch in range(1, epochs + 1):
+            codec.train()
+            roi_detector.train()
+            epoch_loss = 0.0
+            batches = 0
+            epoch_start = time.perf_counter()
+            video_states: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
 
-        for batch in loader:
-            if isinstance(batch, torch.Tensor):
-                batch = {
-                    "frame": batch,
-                    "prev_frame": torch.zeros_like(batch),
-                    "has_prev": torch.zeros(batch.size(0), dtype=torch.bool),
-                    "video_id": ["synthetic"] * batch.size(0),
-                }
+            for batch in loader:
+                if isinstance(batch, torch.Tensor):
+                    batch = {
+                        "frame": batch,
+                        "prev_frame": torch.zeros_like(batch),
+                        "has_prev": torch.zeros(batch.size(0), dtype=torch.bool),
+                        "video_id": ["synthetic"] * batch.size(0),
+                    }
 
-            avg_batch_loss = _train_batch(
-                batch,
-                device=device,
-                roi_detector=roi_detector,
-                codec=codec,
-                quantizer=quantizer,
-                loss_fn=loss_fn,
-                optimizer=optimizer,
-                video_states=video_states,
-            )
-            epoch_loss += avg_batch_loss
-            batches += 1
-
-            if batches % log_every == 0:
-                elapsed = time.perf_counter() - epoch_start
-                logger.info(
-                    "Epoch %s batch %s — loss=%.6f elapsed=%.1fs",
-                    epoch,
-                    batches,
-                    avg_batch_loss,
-                    elapsed,
+                avg_batch_loss = _train_batch(
+                    batch,
+                    device=device,
+                    roi_detector=roi_detector,
+                    codec=codec,
+                    quantizer=quantizer,
+                    loss_fn=loss_fn,
+                    optimizer=optimizer,
+                    video_states=video_states,
                 )
+                epoch_loss += avg_batch_loss
+                batches += 1
 
-            if dry_run:
-                break
+                if batches % log_every == 0:
+                    elapsed = time.perf_counter() - epoch_start
+                    logger.info(
+                        "Epoch %s batch %s — loss=%.6f elapsed=%.1fs",
+                        epoch,
+                        batches,
+                        avg_batch_loss,
+                        elapsed,
+                    )
 
-        avg_loss = epoch_loss / max(batches, 1)
-        last_metrics = {"epoch": float(epoch), "loss": avg_loss, "batches": float(batches)}
-        logger.info(
-            "Epoch %s/%s complete — loss=%.6f batches=%s elapsed=%.1fs",
-            epoch,
-            epochs,
-            avg_loss,
-            batches,
-            time.perf_counter() - epoch_start,
-        )
+                if dry_run:
+                    break
 
-        if epoch % save_every == 0 or epoch == epochs:
-            ckpt_path = checkpoint_dir / f"epoch_{epoch:03d}.pt"
-            save_checkpoint(ckpt_path, epoch, codec, roi_detector, optimizer, last_metrics)
+            avg_loss = epoch_loss / max(batches, 1)
+            last_metrics = {"epoch": float(epoch), "loss": avg_loss, "batches": float(batches)}
+            logger.info(
+                "Epoch %s/%s complete — loss=%.6f batches=%s elapsed=%.1fs",
+                epoch,
+                epochs,
+                avg_loss,
+                batches,
+                time.perf_counter() - epoch_start,
+            )
+
+            if epoch % save_every == 0 or epoch == epochs:
+                ckpt_path = checkpoint_dir / f"epoch_{epoch:03d}.pt"
+                save_checkpoint(ckpt_path, epoch, codec, roi_detector, optimizer, last_metrics)
+    finally:
+        shutdown_dataloader(loader)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
 
     metrics_path = Path(optional_env("TRAIN_METRICS_PATH", "metrics/train_metrics.json"))
-    metrics_path.parent.mkdir(parents=True, exist_ok=True)
-    with metrics_path.open("w", encoding="utf-8") as handle:
-        json.dump(last_metrics, handle, indent=2)
-    logger.info("Wrote metrics to %s", metrics_path)
+    write_metrics_file(metrics_path, last_metrics)
+    logger.info("Training finished successfully")
     return last_metrics
 
 
 def main() -> None:
     args = parse_args()
     train(args.config, args.params, dry_run=args.dry_run)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

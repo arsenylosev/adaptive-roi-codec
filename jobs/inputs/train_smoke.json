@@ -11,6 +11,6 @@
     "source": "preprocessed",
     "split": "train",
     "frame_stride": 30,
-    "num_workers": 4
+    "num_workers": 0
   }
 }

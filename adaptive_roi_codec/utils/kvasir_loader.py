@@ -181,7 +181,16 @@ class FrameRecord:
     prev_path: Path | None = None
 
 
-def load_preprocessed_manifest(manifest_path: Path) -> list[FrameRecord]:
+def resolve_frame_cache_path(frames_root: Path, raw_path: Path) -> Path:
+    if raw_path.is_file():
+        return raw_path
+    relative = frames_root / raw_path
+    if relative.is_file():
+        return relative
+    raise FileNotFoundError(f"Frame cache not found: {raw_path} (frames_root={frames_root})")
+
+
+def load_preprocessed_manifest(manifest_path: Path, *, frames_root: Path | None = None) -> list[FrameRecord]:
     if not manifest_path.exists():
         raise FileNotFoundError(
             f"Preprocessed manifest not found: {manifest_path}. "
@@ -195,12 +204,18 @@ def load_preprocessed_manifest(manifest_path: Path) -> list[FrameRecord]:
                 continue
             row = json.loads(line)
             prev_raw = row.get("prev_path")
+            path = Path(row["path"])
+            prev_path = Path(prev_raw) if prev_raw else None
+            if frames_root is not None:
+                path = resolve_frame_cache_path(frames_root, path)
+                if prev_path is not None:
+                    prev_path = resolve_frame_cache_path(frames_root, prev_path)
             records.append(
                 FrameRecord(
                     video_id=row["video_id"],
                     frame_index=int(row["frame_index"]),
-                    path=Path(row["path"]),
-                    prev_path=Path(prev_raw) if prev_raw else None,
+                    path=path,
+                    prev_path=prev_path,
                 )
             )
     if not records:
@@ -222,7 +237,7 @@ class KvasirPreprocessedFrameDataset(Dataset[FrameSample]):
     ) -> None:
         self.frames_root = frames_root
         manifest_path = frames_root / PREPROCESSED_MANIFEST
-        records = load_preprocessed_manifest(manifest_path)
+        records = load_preprocessed_manifest(manifest_path, frames_root=frames_root)
 
         if video_ids is None and dataset_root and split:
             split_file = resolve_splits_dir(dataset_root, splits_subdir) / f"{split}_videos.txt"

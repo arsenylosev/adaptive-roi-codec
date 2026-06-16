@@ -55,3 +55,26 @@ def test_preprocessed_dataset_loads_npy_frames(tmp_path: Path) -> None:
     sample = dataset[1]
     assert sample.frame.shape == (3, 336, 336)
     assert float(sample.prev_frame[0, 0, 0]) == 0.0
+
+
+def test_load_preprocessed_manifest_resolves_relative_paths(tmp_path: Path) -> None:
+    frame_a = tmp_path / "v1" / f"frame_000000{FRAME_CACHE_SUFFIX}"
+    frame_b = tmp_path / "v1" / f"frame_000030{FRAME_CACHE_SUFFIX}"
+    save_preprocessed_frame(np.zeros((3, 336, 336), dtype=np.float32), frame_a)
+    save_preprocessed_frame(np.ones((3, 336, 336), dtype=np.float32), frame_b)
+
+    manifest = tmp_path / PREPROCESSED_MANIFEST
+    rows = [
+        {"video_id": "v1", "frame_index": 0, "path": "v1/frame_000000.npy", "prev_path": None},
+        {
+            "video_id": "v1",
+            "frame_index": 30,
+            "path": "v1/frame_000030.npy",
+            "prev_path": "v1/frame_000000.npy",
+        },
+    ]
+    manifest.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    records = load_preprocessed_manifest(manifest, frames_root=tmp_path)
+    assert records[1].path == frame_b
+    assert records[1].prev_path == frame_a
