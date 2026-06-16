@@ -15,6 +15,7 @@ training:
   lambda_temp: 0.1
   beta_0: 0.01
   eta: 0.5
+  log_every_batches: 20
 
 quantizer:
   q_min: 0.1
@@ -30,12 +31,16 @@ roi_detector:
 data:
   s3_prefix: kvasir-capsule
   local_root: kvasir-capsule
+  # video: decode MP4 on the fly (slow over S3 FUSE). preprocessed: read stage-1 .pt frames.
+  source: video
+  frames_root: frames_cache
   video_subdir: raw/labelled_videos
   splits_subdir: splits
   split: train
   frame_stride: 30
   max_frames_per_video: null
   num_workers: 2
+  shuffle: true
   dry_run_samples: 4
   debug_res: [336, 336]
 

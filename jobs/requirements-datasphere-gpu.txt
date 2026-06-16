@@ -1,0 +1,10 @@
+# Pinned for Datasphere GPU VMs (V100 / T4 driver CUDA 12.x).
+# PyTorch 2.12 + bundled CUDA 13 fails on g1.1 with "driver too old (12020)".
+# cu121 wheels match DataSphere host drivers; see ADR-003.
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.4.1+cu121
+torchvision==0.19.1+cu121
+PyYAML==6.0.3
+python-dotenv==1.2.2
+numpy>=1.26,<3
+opencv-python-headless>=4.8,<5

@@ -1,0 +1,16 @@
+{
+  "experiment_id": "baseline-kappa-2.0",
+  "training": {
+    "epochs": 1,
+    "log_every_batches": 10
+  },
+  "quantizer": {
+    "kappa": 2.0
+  },
+  "data": {
+    "source": "preprocessed",
+    "split": "train",
+    "frame_stride": 30,
+    "num_workers": 4
+  }
+}

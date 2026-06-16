@@ -283,7 +283,29 @@ Training defaults (`configs/base.yaml`):
 
 ## 8. Launch Datasphere Job
 
-Render job config:
+Two-stage pipeline ([ADR-003](../decisions/ADR-003-two-stage-training-pipeline.md)) — **do not** train directly from MP4 on S3 over a GPU VM (13 h CPU fallback observed in smoke test).
+
+### Stage 1 — Extract frames (CPU `c1.8`)
+
+Decodes MP4s once into `.pt` tensors on S3 at `kvasir-capsule/processed/frames/`:
+
+```bash
+uv run launch-train --job extract --dry-run
+uv run launch-train --job extract --execute
+```
+
+### Stage 2 — Train (GPU `gt4.1` smoke / `g1.1` full)
+
+Uses pinned PyTorch **cu121** wheels and `TRAIN_REQUIRE_CUDA=1` (fails fast if GPU unavailable):
+
+```bash
+uv run launch-train --dry-run --params jobs/inputs/train_smoke.json
+uv run launch-train --execute --params jobs/inputs/train_smoke.json
+```
+
+`train_smoke.json` sets `data.source: preprocessed`. Confirm stdout shows `Device: cuda` and batch progress logs.
+
+Render-only:
 
 ```bash
 uv run launch-train --dry-run
@@ -327,6 +349,8 @@ Run separate jobs with distinct `experiment_id` values:
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
+| **`Device: cpu` on GPU VM; driver too old** | `python: auto` installed PyTorch 2.12 + CUDA 13 | Use manual `jobs/requirements-datasphere-gpu.txt` (cu121) + `TRAIN_REQUIRE_CUDA=1` ([ADR-003](../decisions/ADR-003-two-stage-training-pipeline.md)) |
+| **13+ h epoch, 0% GPU, high CPU** | CPU training + S3 MP4 decode | Run stage-1 extract; train with `data.source: preprocessed` |
 | **`Project disk not created yet. Open project to create it.`** | Job requests `attach-project-disk` but the project was never opened in JupyterLab | Open the DataSphere project in JupyterLab once and wait for it to finish loading; **or** remove `attach-project-disk` from the job config if you only use S3 mounts (this repo’s training job does not need project disk) |
 | **`SignatureDoesNotMatch` on upload** | Missing/wrong `AWS_DEFAULT_REGION`, swapped key ID/secret, or `uvx` without env | Use **`yc storage s3 cp`** (Option A), or export `AWS_DEFAULT_REGION=ru-central1` + run preflight test (Option B) |
 | **`AccessDenied`** | Service account lacks `storage.editor` | Assign role on folder/bucket in IAM |

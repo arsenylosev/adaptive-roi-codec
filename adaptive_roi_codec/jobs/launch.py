@@ -23,6 +23,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DEFAULT_TEMPLATE = REPO_ROOT / "jobs" / "configs" / "job_train.yaml.template"
+EXTRACT_TEMPLATE = REPO_ROOT / "jobs" / "configs" / "job_extract_frames.yaml.template"
 GENERATED_DIR = REPO_ROOT / "jobs" / "configs" / ".generated"
 
 
@@ -31,10 +32,16 @@ def parse_args() -> argparse.Namespace:
         description="Render a Datasphere Jobs config and launch GPU training"
     )
     parser.add_argument(
+        "--job",
+        choices=("train", "extract"),
+        default="train",
+        help="Job template: GPU training (train) or CPU frame extraction (extract)",
+    )
+    parser.add_argument(
         "--template",
         type=Path,
-        default=DEFAULT_TEMPLATE,
-        help="Job config template path",
+        default=None,
+        help="Job config template path (overrides --job default)",
     )
     parser.add_argument(
         "--params",
@@ -92,17 +99,30 @@ def build_context(args: argparse.Namespace) -> dict[str, str]:
     load_project_env()
     project_id = args.project_id or require_env("DATASPHERE_PROJECT_ID")
     s3_connector_id = require_env("S3_CONNECTOR_ID")
+    s3_prefix = os.getenv("S3_DATA_PREFIX", "kvasir-capsule")
+    frames_mount = f"/job/s3/{s3_connector_id}/{s3_prefix}/processed/frames"
 
-    return {
-        "JOB_NAME": os.getenv("DATASPHERE_JOB_NAME", "vae-capsule-train"),
-        "JOB_DESC": os.getenv(
+    if args.job == "extract":
+        job_name = os.getenv("DATASPHERE_EXTRACT_JOB_NAME", "kvasir-extract-frames")
+        job_desc = os.getenv(
+            "DATASPHERE_EXTRACT_JOB_DESC",
+            "CPU stage-1: decode Kvasir MP4s to .pt tensors on S3",
+        )
+    else:
+        job_name = os.getenv("DATASPHERE_JOB_NAME", "vae-capsule-train")
+        job_desc = os.getenv(
             "DATASPHERE_JOB_DESC",
             "VAE codec training on Kvasir-Capsule with adaptive ROI quantization",
-        ),
+        )
+
+    return {
+        "JOB_NAME": job_name,
+        "JOB_DESC": job_desc,
         "DATASPHERE_PROJECT_ID": project_id,
         "S3_CONNECTOR_ID": s3_connector_id,
-        "S3_DATA_PREFIX": os.getenv("S3_DATA_PREFIX", "kvasir-capsule"),
+        "S3_DATA_PREFIX": s3_prefix,
         "S3_CHECKPOINT_SUBDIR": os.getenv("S3_CHECKPOINT_SUBDIR", "checkpoints"),
+        "FRAMES_S3_DIR": frames_mount,
         "WORKING_STORAGE_GB": os.getenv("DATASPHERE_WORKING_STORAGE_GB", "150"),
     }
 
@@ -150,6 +170,15 @@ def execute_job(
 
 def main() -> None:
     args = parse_args()
+
+    if args.template is None:
+        args.template = EXTRACT_TEMPLATE if args.job == "extract" else DEFAULT_TEMPLATE
+    if args.config_name == "job_train.yaml" and args.job == "extract":
+        args.config_name = "job_extract_frames.yaml"
+    if args.params == REPO_ROOT / "jobs" / "inputs" / "train_input.json" and args.job == "extract":
+        extract_params = REPO_ROOT / "jobs" / "inputs" / "extract_input.json"
+        if extract_params.exists():
+            args.params = extract_params
 
     if not args.template.exists():
         raise FileNotFoundError(f"Template not found: {args.template}")

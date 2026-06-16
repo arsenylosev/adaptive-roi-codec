@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
 DEFAULT_FRAME_SIZE = 336
+PREPROCESSED_MANIFEST = "frames_manifest.jsonl"
 
 
 def discover_videos(root: Path) -> list[Path]:
@@ -167,14 +169,19 @@ class KvasirVideoFrameDataset(IterableDataset[FrameSample]):
         prev_tensor: torch.Tensor | None = None
         frame_index = 0
         yielded = 0
+        next_yield = 0
 
         try:
             while True:
+                if frame_index < next_yield:
+                    capture.set(cv2.CAP_PROP_POS_FRAMES, next_yield)
+                    frame_index = next_yield
+
                 ok, frame_bgr = capture.read()
                 if not ok:
                     break
 
-                if frame_index % self.frame_stride == 0:
+                if frame_index == next_yield:
                     tensor = frame_to_tensor(frame_bgr, self.height, self.width)
                     yield FrameSample(
                         frame=tensor,
@@ -184,6 +191,7 @@ class KvasirVideoFrameDataset(IterableDataset[FrameSample]):
                     )
                     prev_tensor = tensor.detach()
                     yielded += 1
+                    next_yield = frame_index + self.frame_stride
                     if self.max_frames_per_video and yielded >= self.max_frames_per_video:
                         break
 
@@ -213,6 +221,88 @@ def collate_frame_samples(batch: list[FrameSample]) -> dict[str, torch.Tensor | 
         "video_id": [sample.video_id for sample in batch],
         "frame_index": torch.tensor([sample.frame_index for sample in batch]),
     }
+
+
+@dataclass(frozen=True)
+class FrameRecord:
+    video_id: str
+    frame_index: int
+    path: Path
+    prev_path: Path | None = None
+
+
+def load_preprocessed_manifest(manifest_path: Path) -> list[FrameRecord]:
+    if not manifest_path.exists():
+        raise FileNotFoundError(
+            f"Preprocessed manifest not found: {manifest_path}. "
+            "Run extract-frames (stage 1) or set data.source=video."
+        )
+    records: list[FrameRecord] = []
+    with manifest_path.open(encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            prev_raw = row.get("prev_path")
+            records.append(
+                FrameRecord(
+                    video_id=row["video_id"],
+                    frame_index=int(row["frame_index"]),
+                    path=Path(row["path"]),
+                    prev_path=Path(prev_raw) if prev_raw else None,
+                )
+            )
+    if not records:
+        raise FileNotFoundError(f"No frame records in {manifest_path}")
+    return records
+
+
+class KvasirPreprocessedFrameDataset(Dataset[FrameSample]):
+    """Load 336×336 frames from pre-extracted `.pt` tensors (stage-1 output)."""
+
+    def __init__(
+        self,
+        frames_root: Path,
+        *,
+        split: str = "train",
+        dataset_root: Path | None = None,
+        splits_subdir: str = "splits",
+        video_ids: list[str] | None = None,
+    ) -> None:
+        self.frames_root = frames_root
+        manifest_path = frames_root / PREPROCESSED_MANIFEST
+        records = load_preprocessed_manifest(manifest_path)
+
+        if video_ids is None and dataset_root and split:
+            split_file = resolve_splits_dir(dataset_root, splits_subdir) / f"{split}_videos.txt"
+            if split_file.exists():
+                video_ids = load_video_ids(split_file)
+
+        if video_ids:
+            allowed = set(video_ids)
+            records = [record for record in records if record.video_id in allowed]
+
+        if not records:
+            raise FileNotFoundError(f"No preprocessed frames under {frames_root} for split={split!r}")
+
+        self.records = records
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, index: int) -> FrameSample:
+        record = self.records[index]
+        tensor = torch.load(record.path, map_location="cpu", weights_only=True)
+        prev = None
+        if record.prev_path is not None:
+            prev = torch.load(record.prev_path, map_location="cpu", weights_only=True)
+        return FrameSample(
+            frame=tensor,
+            prev_frame=prev,
+            video_id=record.video_id,
+            frame_index=record.frame_index,
+        )
 
 
 class VideoIndexDataset(Dataset[Path]):

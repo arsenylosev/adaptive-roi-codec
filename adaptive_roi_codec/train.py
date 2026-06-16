@@ -6,6 +6,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 
 import torch
@@ -16,8 +17,10 @@ from adaptive_roi_codec.model.quantizer import AdaptiveQuantizer
 from adaptive_roi_codec.model.roi_detector import ROIDetector
 from adaptive_roi_codec.model.vae_codec import VAECodec
 from adaptive_roi_codec.utils.config import load_yaml, merge_dicts
+from adaptive_roi_codec.utils.device import resolve_training_device
 from adaptive_roi_codec.utils.env import load_project_env, optional_env, s3_mount_root
 from adaptive_roi_codec.utils.kvasir_loader import (
+    KvasirPreprocessedFrameDataset,
     KvasirVideoFrameDataset,
     SyntheticFrameDataset,
     collate_frame_samples,
@@ -65,6 +68,14 @@ def resolve_dataset_root(config: dict) -> Path:
     return local_root
 
 
+def resolve_frames_root(config: dict) -> Path:
+    data_cfg = config.get("data", {})
+    env_path = optional_env("FRAMES_OUTPUT_DIR", "")
+    if env_path:
+        return Path(env_path)
+    return Path(data_cfg.get("frames_root", "frames_cache"))
+
+
 def resolve_checkpoint_dir(config: dict) -> Path:
     ckpt_cfg = config.get("checkpoints", {})
     connector_id = optional_env("S3_CONNECTOR_ID", ckpt_cfg.get("s3_connector_id", ""))
@@ -80,12 +91,14 @@ def resolve_checkpoint_dir(config: dict) -> Path:
     return path
 
 
-def build_dataloader(config: dict, dry_run: bool) -> DataLoader:
+def build_dataloader(config: dict, dry_run: bool, device: torch.device) -> DataLoader:
     training = config["training"]
     data_cfg = config.get("data", {})
     model_cfg = config["model"]
     batch_size = training["batch_size"]
     width, height = model_cfg["input_res"]
+    num_workers = int(data_cfg.get("num_workers", 0))
+    pin_memory = device.type == "cuda"
 
     if dry_run or optional_env("TRAIN_DRY_RUN", "").lower() in {"1", "true", "yes"}:
         dataset = SyntheticFrameDataset(
@@ -94,11 +107,39 @@ def build_dataloader(config: dict, dry_run: bool) -> DataLoader:
             width=width,
         )
         logger.warning("Dry-run mode: using %sx%s synthetic frames", width, height)
-        return DataLoader(dataset, batch_size=min(batch_size, 2), shuffle=True, num_workers=0)
+        return DataLoader(
+            dataset,
+            batch_size=min(batch_size, 2),
+            shuffle=True,
+            num_workers=0,
+            pin_memory=False,
+        )
 
-    root = resolve_dataset_root(config)
+    dataset_root = resolve_dataset_root(config)
+    source = data_cfg.get("source", "video")
+
+    if source == "preprocessed":
+        frames_root = resolve_frames_root(config)
+        logger.info("Using preprocessed frames from %s", frames_root)
+        dataset = KvasirPreprocessedFrameDataset(
+            frames_root,
+            split=data_cfg.get("split", "train"),
+            dataset_root=dataset_root,
+            splits_subdir=data_cfg.get("splits_subdir", "splits"),
+        )
+        logger.info("Preprocessed frame count: %s", len(dataset))
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=bool(data_cfg.get("shuffle", True)),
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            collate_fn=collate_frame_samples,
+            persistent_workers=num_workers > 0,
+        )
+
     dataset = KvasirVideoFrameDataset(
-        root,
+        dataset_root,
         split=data_cfg.get("split", "train"),
         frame_stride=int(data_cfg.get("frame_stride", 30)),
         max_frames_per_video=data_cfg.get("max_frames_per_video"),
@@ -108,7 +149,7 @@ def build_dataloader(config: dict, dry_run: bool) -> DataLoader:
         splits_subdir=data_cfg.get("splits_subdir", "splits"),
     )
     logger.info(
-        "Using Kvasir video loader: split=%s stride=%s videos=%s",
+        "Using Kvasir video loader (S3 decode): split=%s stride=%s videos=%s",
         data_cfg.get("split", "train"),
         data_cfg.get("frame_stride", 30),
         len(dataset.videos),
@@ -117,8 +158,10 @@ def build_dataloader(config: dict, dry_run: bool) -> DataLoader:
         dataset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=int(data_cfg.get("num_workers", 0)),
+        num_workers=num_workers,
+        pin_memory=pin_memory,
         collate_fn=collate_frame_samples,
+        persistent_workers=num_workers > 0,
     )
 
 
@@ -141,6 +184,53 @@ def save_checkpoint(
     logger.info("Saved checkpoint to %s", path)
 
 
+def _train_batch(
+    batch: dict,
+    *,
+    device: torch.device,
+    roi_detector: ROIDetector,
+    codec: VAECodec,
+    quantizer: AdaptiveQuantizer,
+    loss_fn: ClinicalLoss,
+    optimizer: torch.optim.Optimizer,
+    video_states: dict[str, tuple[torch.Tensor, torch.Tensor]],
+) -> float:
+    frames = batch["frame"].to(device, non_blocking=True)
+    prev_frames = batch["prev_frame"].to(device, non_blocking=True)
+    has_prev = batch["has_prev"]
+    video_ids: list[str] = batch["video_id"]
+    batch_size = frames.size(0)
+
+    optimizer.zero_grad(set_to_none=True)
+    batch_loss = 0.0
+
+    for index in range(batch_size):
+        frame = frames[index : index + 1]
+        video_id = video_ids[index]
+        use_prev = bool(has_prev[index].item())
+
+        prev_frame = prev_frames[index : index + 1] if use_prev else None
+        prev_recon = None
+        prev_z = None
+        if use_prev and video_id in video_states:
+            recon_state, z_state = video_states[video_id]
+            prev_recon = recon_state.unsqueeze(0)
+            prev_z = z_state.unsqueeze(0)
+
+        mask = roi_detector(frame)
+        outputs = codec(frame, prev_recon=prev_recon, prev_z=prev_z)
+        outputs["z"] = quantizer.quantize(outputs["z"], mask)
+        losses = loss_fn(outputs, frame, mask, prev_frame, prev_recon)
+
+        (losses["total"] / batch_size).backward()
+        batch_loss += float(losses["total"].item())
+
+        video_states[video_id] = (outputs["recon"].detach()[0], outputs["z"].detach()[0])
+
+    optimizer.step()
+    return batch_loss / batch_size
+
+
 def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str, float]:
     load_project_env()
     config = load_yaml(config_path)
@@ -150,17 +240,15 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
             params = json.load(handle)
         config = merge_dicts(config, params)
 
-    device_name = optional_env("TRAIN_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
-    device = torch.device(device_name)
-    logger.info("Device: %s", device)
-    if device.type == "cuda":
-        logger.info("GPU: %s", torch.cuda.get_device_name(0))
+    device = resolve_training_device()
 
     model_cfg = config["model"]
     training_cfg = config["training"]
     quant_cfg = config["quantizer"]
+    data_cfg = config.get("data", {})
     width, height = model_cfg["input_res"]
-    logger.info("Training resolution: %sx%s", width, height)
+    log_every = int(training_cfg.get("log_every_batches", 20))
+    logger.info("Training resolution: %sx%s data.source=%s", width, height, data_cfg.get("source", "video"))
 
     roi_detector = ROIDetector(input_size=config["roi_detector"]["input_res"]).to(device)
     codec = VAECodec(latent_channels=model_cfg["latent_ch"]).to(device)
@@ -182,66 +270,66 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
     params = list(codec.parameters()) + list(roi_detector.parameters())
     optimizer = torch.optim.Adam(params, lr=training_cfg["lr"])
 
-    loader = build_dataloader(config, dry_run=dry_run)
+    loader = build_dataloader(config, dry_run=dry_run, device=device)
     checkpoint_dir = resolve_checkpoint_dir(config)
     save_every = config.get("checkpoints", {}).get("save_every_epochs", 5)
 
     epochs = 1 if dry_run else training_cfg["epochs"]
     last_metrics: dict[str, float] = {}
+    video_states: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
 
     for epoch in range(1, epochs + 1):
         codec.train()
         roi_detector.train()
         epoch_loss = 0.0
         batches = 0
-        prev_recon: torch.Tensor | None = None
-        prev_z: torch.Tensor | None = None
+        epoch_start = time.perf_counter()
 
         for batch in loader:
             if isinstance(batch, torch.Tensor):
-                samples = [(batch[i : i + 1], None) for i in range(batch.size(0))]
-            else:
-                frames = batch["frame"]
-                prev_frames = batch["prev_frame"]
-                has_prev = batch["has_prev"]
-                samples = [
-                    (
-                        frames[i : i + 1],
-                        prev_frames[i : i + 1] if bool(has_prev[i].item()) else None,
-                    )
-                    for i in range(frames.size(0))
-                ]
+                batch = {
+                    "frame": batch,
+                    "prev_frame": torch.zeros_like(batch),
+                    "has_prev": torch.zeros(batch.size(0), dtype=torch.bool),
+                    "video_id": ["synthetic"] * batch.size(0),
+                }
 
-            for frame, prev_frame in samples:
-                frame = frame.to(device)
-                if prev_frame is not None:
-                    prev_frame = prev_frame.to(device)
-                else:
-                    prev_recon = None
-                    prev_z = None
+            avg_batch_loss = _train_batch(
+                batch,
+                device=device,
+                roi_detector=roi_detector,
+                codec=codec,
+                quantizer=quantizer,
+                loss_fn=loss_fn,
+                optimizer=optimizer,
+                video_states=video_states,
+            )
+            epoch_loss += avg_batch_loss
+            batches += 1
 
-                mask = roi_detector(frame)
-                outputs = codec(frame, prev_recon=prev_recon, prev_z=prev_z)
-                outputs["z"] = quantizer.quantize(outputs["z"], mask)
-                losses = loss_fn(outputs, frame, mask, prev_frame, prev_recon)
+            if batches % log_every == 0:
+                elapsed = time.perf_counter() - epoch_start
+                logger.info(
+                    "Epoch %s batch %s — loss=%.6f elapsed=%.1fs",
+                    epoch,
+                    batches,
+                    avg_batch_loss,
+                    elapsed,
+                )
 
-                optimizer.zero_grad(set_to_none=True)
-                losses["total"].backward()
-                optimizer.step()
-
-                epoch_loss += float(losses["total"].item())
-                batches += 1
-                prev_recon = outputs["recon"].detach()
-                prev_z = outputs["z"].detach()
-
-                if dry_run:
-                    break
             if dry_run:
                 break
 
         avg_loss = epoch_loss / max(batches, 1)
-        last_metrics = {"epoch": float(epoch), "loss": avg_loss}
-        logger.info("Epoch %s/%s — loss=%.6f", epoch, epochs, avg_loss)
+        last_metrics = {"epoch": float(epoch), "loss": avg_loss, "batches": float(batches)}
+        logger.info(
+            "Epoch %s/%s complete — loss=%.6f batches=%s elapsed=%.1fs",
+            epoch,
+            epochs,
+            avg_loss,
+            batches,
+            time.perf_counter() - epoch_start,
+        )
 
         if epoch % save_every == 0 or epoch == epochs:
             ckpt_path = checkpoint_dir / f"epoch_{epoch:03d}.pt"

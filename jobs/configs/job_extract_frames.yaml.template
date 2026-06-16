@@ -1,36 +1,30 @@
 name: ${JOB_NAME}
 desc: ${JOB_DESC}
 
-cmd: python -m adaptive_roi_codec.train --config ${CONFIG} --params ${PARAMS}
+cmd: python -m adaptive_roi_codec.cli.extract_frames --config ${CONFIG} --params ${PARAMS}
 
 env:
   python:
     type: manual
     version: "3.11"
-    requirements-file: jobs/requirements-datasphere-gpu.txt
+    requirements-file: jobs/requirements-datasphere-cpu.txt
   vars:
     - PYTHONPATH: .
-    - TRAIN_REQUIRE_CUDA: "1"
     - S3_CONNECTOR_ID: ${S3_CONNECTOR_ID}
     - S3_DATA_PREFIX: ${S3_DATA_PREFIX}
-    - S3_CHECKPOINT_SUBDIR: ${S3_CHECKPOINT_SUBDIR}
     - FRAMES_OUTPUT_DIR: ${FRAMES_S3_DIR}
-    - TRAIN_METRICS_PATH: metrics/train_metrics.json
 
 inputs:
   - configs/base.yaml: CONFIG
-  - jobs/inputs/train_input.json: PARAMS
-  - jobs/requirements-datasphere-gpu.txt
-
-outputs:
-  - metrics/train_metrics.json: METRICS
+  - jobs/inputs/extract_input.json: PARAMS
+  - jobs/requirements-datasphere-cpu.txt
 
 s3-mounts:
   - ${S3_CONNECTOR_ID}
 
 cloud-instance-types:
-  - gt4.1
-  - g1.1
+  - c1.8
+  - c1.4
 
 working-storage:
   type: SSD
