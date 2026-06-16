@@ -23,6 +23,8 @@ env:
     - TRAIN_METRICS_PATH: metrics/train_metrics.json
     - DATASPHERE_LOCAL_CHECKPOINT_DIR: /servant/jobs/extended_working_storage/checkpoints
     - TRAIN_BATCH_SIZE: ${TRAIN_BATCH_SIZE}
+    - TQDM_DISABLE: "1"
+    - PYTHONUNBUFFERED: "1"
 
 inputs:
   - configs/base.yaml: CONFIG
@@ -45,4 +47,4 @@ working-storage:
 
 graceful-shutdown:
   signal: SIGTERM
-  timeout: 30s
+  timeout: 120s

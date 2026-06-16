@@ -22,6 +22,7 @@ from adaptive_roi_codec.model.vae_codec import VAECodec
 from adaptive_roi_codec.utils.config import load_yaml, merge_dicts
 from adaptive_roi_codec.utils.device import resolve_training_device
 from adaptive_roi_codec.utils.env import load_project_env, optional_env, s3_mount_root
+from adaptive_roi_codec.utils.job_progress import report_job_progress
 from adaptive_roi_codec.utils.kvasir_loader import (
     KvasirPreprocessedFrameDataset,
     KvasirVideoFrameDataset,
@@ -178,6 +179,14 @@ def shutdown_dataloader(loader: DataLoader | None) -> None:
         loader._iterator = None
     del loader
     gc.collect()
+
+
+def flush_logs_and_exit(code: int = 0) -> None:
+    """Force a clean process exit for DataSphere Jobs (avoid PyTorch atexit hangs)."""
+    logging.shutdown()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
 
 
 def save_checkpoint(
@@ -359,11 +368,13 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
     optimizer = torch.optim.Adam(params, lr=training_cfg["lr"])
 
     loader = build_dataloader(config, dry_run=dry_run, device=device)
+    total_batches = len(loader) if not dry_run else 1
     checkpoint_dir = resolve_checkpoint_dir(config)
     save_every = config.get("checkpoints", {}).get("save_every_epochs", 5)
 
     epochs = 1 if dry_run else training_cfg["epochs"]
     last_metrics: dict[str, float] = {}
+    report_job_progress(0, f"Starting training: batch_size={training_cfg['batch_size']}")
 
     try:
         for epoch in range(1, epochs + 1):
@@ -408,6 +419,12 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
                         avg_batch_loss,
                         elapsed,
                     )
+                    if total_batches > 0:
+                        epoch_progress = (epoch - 1 + batches / total_batches) / epochs
+                        report_job_progress(
+                            int(epoch_progress * 100),
+                            f"epoch {epoch}/{epochs} batch {batches}/{total_batches}",
+                        )
 
                 if dry_run:
                     break
@@ -434,14 +451,19 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
 
     metrics_path = Path(optional_env("TRAIN_METRICS_PATH", "metrics/train_metrics.json"))
     write_metrics_file(metrics_path, last_metrics)
+    report_job_progress(100, "Training finished successfully")
     logger.info("Training finished successfully")
     return last_metrics
 
 
 def main() -> None:
     args = parse_args()
-    train(args.config, args.params, dry_run=args.dry_run)
-    sys.exit(0)
+    try:
+        train(args.config, args.params, dry_run=args.dry_run)
+    except Exception:
+        logger.exception("Training failed")
+        flush_logs_and_exit(1)
+    flush_logs_and_exit(0)
 
 
 if __name__ == "__main__":

@@ -49,6 +49,8 @@ def test_rendered_job_config_is_valid_yaml_with_required_sections(tmp_path: Path
     for item in config["env"]["vars"]:
         env_vars.update(item)
     assert str(env_vars["TRAIN_BATCH_SIZE"]) == "12"
+    assert env_vars["TQDM_DISABLE"] == "1"
+    assert env_vars["PYTHONUNBUFFERED"] == "1"
 
 
 def test_materialize_train_params_writes_batch_size_override(tmp_path: Path, monkeypatch) -> None:
