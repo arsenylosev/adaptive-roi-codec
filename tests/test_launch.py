@@ -7,6 +7,7 @@ import yaml
 
 from adaptive_roi_codec.jobs.launch import (
     EXTRACT_TEMPLATE,
+    params_input_path,
     render_template,
     resolve_datasphere_cli,
     write_generated_config,
@@ -21,6 +22,7 @@ def test_rendered_job_config_is_valid_yaml_with_required_sections(tmp_path: Path
     context = {
         "JOB_NAME": yaml_quote("test-train"),
         "JOB_DESC": yaml_quote("unit test job"),
+        "PARAMS_INPUT": "jobs/inputs/train_smoke.json",
         "S3_CONNECTOR_ID": "connector-test",
         "S3_DATA_PREFIX": "kvasir-capsule",
         "S3_CHECKPOINT_SUBDIR": "checkpoints",
@@ -37,12 +39,26 @@ def test_rendered_job_config_is_valid_yaml_with_required_sections(tmp_path: Path
         "python -m adaptive_roi_codec.train --config ${CONFIG} --params ${PARAMS}"
     )
     assert "\n" not in config["cmd"]
+    assert config["inputs"][1] == {"jobs/inputs/train_smoke.json": "PARAMS"}
+
+
+def test_params_input_path_must_be_inside_repo(tmp_path: Path) -> None:
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="inside the repository"):
+        params_input_path(outside)
+
+
+def test_params_input_path_returns_posix_relative_path() -> None:
+    params = REPO_ROOT / "jobs" / "inputs" / "train_smoke.json"
+    assert params_input_path(params) == "jobs/inputs/train_smoke.json"
 
 
 def test_extract_job_description_with_colon_is_valid_yaml() -> None:
     context = {
         "JOB_NAME": yaml_quote("kvasir-extract-frames"),
         "JOB_DESC": yaml_quote("CPU stage-1: decode Kvasir MP4s to .pt tensors on S3"),
+        "PARAMS_INPUT": "jobs/inputs/extract_input.json",
         "S3_CONNECTOR_ID": "connector-test",
         "S3_DATA_PREFIX": "kvasir-capsule",
         "FRAMES_S3_DIR": "/job/s3/connector-test/kvasir-capsule/processed/frames",

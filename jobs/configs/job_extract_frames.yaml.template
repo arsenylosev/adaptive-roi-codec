@@ -18,7 +18,7 @@ env:
 
 inputs:
   - configs/base.yaml: CONFIG
-  - jobs/inputs/extract_input.json: PARAMS
+  - ${PARAMS_INPUT}: PARAMS
   - jobs/requirements-datasphere-cpu.txt
 
 s3-mounts:

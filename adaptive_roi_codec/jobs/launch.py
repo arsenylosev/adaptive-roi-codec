@@ -118,6 +118,17 @@ def validate_inputs(params_path: Path) -> None:
         json.load(handle)
 
 
+def params_input_path(params_path: Path) -> str:
+    """Return repo-relative path for DataSphere job inputs."""
+    resolved = params_path.resolve()
+    try:
+        return resolved.relative_to(REPO_ROOT.resolve()).as_posix()
+    except ValueError as exc:
+        raise ValueError(
+            f"Params file must live inside the repository to upload as a job input: {params_path}"
+        ) from exc
+
+
 def build_context(args: argparse.Namespace) -> dict[str, str]:
     load_project_env()
     project_id = args.project_id or require_env("DATASPHERE_PROJECT_ID")
@@ -141,6 +152,7 @@ def build_context(args: argparse.Namespace) -> dict[str, str]:
     return {
         "JOB_NAME": yaml_quote(job_name),
         "JOB_DESC": yaml_quote(job_desc),
+        "PARAMS_INPUT": params_input_path(args.params),
         "DATASPHERE_PROJECT_ID": project_id,
         "S3_CONNECTOR_ID": s3_connector_id,
         "S3_DATA_PREFIX": s3_prefix,

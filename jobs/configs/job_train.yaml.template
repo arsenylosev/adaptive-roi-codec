@@ -24,7 +24,7 @@ env:
 
 inputs:
   - configs/base.yaml: CONFIG
-  - jobs/inputs/train_input.json: PARAMS
+  - ${PARAMS_INPUT}: PARAMS
   - jobs/requirements-datasphere-gpu.txt
 
 outputs:
