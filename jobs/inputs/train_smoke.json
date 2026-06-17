@@ -19,9 +19,10 @@
     "split": "train",
     "max_frames": 2400,
     "frame_stride": 30,
-    "num_workers": 0,
+    "num_workers": 2,
     "prefetch_factor": 2,
     "shuffle": false,
-    "stage_frames_local": true
+    "stage_frames_local": true,
+    "stage_mode": "bulk"
   }
 }

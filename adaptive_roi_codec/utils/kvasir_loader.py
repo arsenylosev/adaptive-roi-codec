@@ -31,6 +31,125 @@ from adaptive_roi_codec.utils.video_index import (
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MAX_STAGE_FRAMES = 4800
+ROOT_DISK_STAGE_THRESHOLD = 0.85
+CACHE_DISK_STAGE_THRESHOLD = 0.90
+STAGE_MODE_BULK = "bulk"
+STAGE_MODE_LAZY = "lazy"
+
+
+def root_filesystem_staging_headroom(threshold: float = ROOT_DISK_STAGE_THRESHOLD) -> bool:
+    """Return False when the job root overlay is too full for S3 FUSE staging."""
+    try:
+        usage = shutil.disk_usage("/")
+    except OSError:
+        return True
+    return (usage.used / usage.total) < threshold
+
+
+def cache_filesystem_staging_headroom(
+    cache_path: Path,
+    required_bytes: int,
+    *,
+    threshold: float = CACHE_DISK_STAGE_THRESHOLD,
+) -> bool:
+    """Return True when ``cache_path``'s filesystem has room for ``required_bytes``."""
+    cache_path.mkdir(parents=True, exist_ok=True)
+    try:
+        usage = shutil.disk_usage(cache_path)
+    except OSError:
+        return False
+    reserved = int(usage.total * threshold) - usage.used
+    available = min(usage.free, max(reserved, 0))
+    return available >= required_bytes
+
+
+def resolve_stage_mode(data_cfg: dict) -> str:
+    explicit = data_cfg.get("stage_mode")
+    if explicit is not None:
+        mode = str(explicit).lower()
+        if mode not in {STAGE_MODE_BULK, STAGE_MODE_LAZY}:
+            raise ValueError(f"Unsupported data.stage_mode: {explicit!r}")
+        return mode
+    if data_cfg.get("stage_frames_local"):
+        return STAGE_MODE_BULK
+    return STAGE_MODE_LAZY
+
+
+def collect_unique_frame_paths(records: list[FrameRecord]) -> set[Path]:
+    paths: set[Path] = set()
+    for record in records:
+        paths.add(record.path)
+        if record.prev_path is not None:
+            paths.add(record.prev_path)
+    return paths
+
+
+def estimate_staging_bytes(records: list[FrameRecord]) -> int:
+    total = 0
+    for path in collect_unique_frame_paths(records):
+        try:
+            total += path.stat().st_size
+        except OSError:
+            # Conservative fallback for unreadable S3 paths during estimation.
+            total += 336 * 336 * 3 * 4
+    return total
+
+
+def resolve_max_staged_files(data_cfg: dict, training_cfg: dict) -> int | None:
+    explicit = data_cfg.get("max_staged_files")
+    if explicit is not None:
+        return int(explicit)
+    max_batches = training_cfg.get("max_train_batches")
+    batch_size = int(training_cfg.get("batch_size", 1))
+    if max_batches is not None:
+        return int(max_batches) * batch_size * 2
+    max_frames = data_cfg.get("max_frames")
+    if max_frames is not None:
+        return min(int(max_frames) * 2, DEFAULT_MAX_STAGE_FRAMES)
+    return DEFAULT_MAX_STAGE_FRAMES
+
+
+def should_stage_frames_locally(
+    data_cfg: dict,
+    training_cfg: dict,
+    *,
+    cache_path: Path | None,
+    records: list[FrameRecord] | None = None,
+) -> bool:
+    if not data_cfg.get("stage_frames_local") or cache_path is None:
+        return False
+
+    stage_mode = resolve_stage_mode(data_cfg)
+    max_frames = data_cfg.get("max_frames")
+
+    if stage_mode == STAGE_MODE_LAZY and max_frames is not None and int(max_frames) > DEFAULT_MAX_STAGE_FRAMES:
+        logger.warning(
+            "Disabling stage_frames_local: max_frames=%s exceeds safe lazy limit %s. "
+            "Use stage_mode=bulk to copy frames to extended SSD before training.",
+            max_frames,
+            DEFAULT_MAX_STAGE_FRAMES,
+        )
+        return False
+
+    if stage_mode == STAGE_MODE_BULK and records is not None:
+        required_bytes = estimate_staging_bytes(records)
+        if not cache_filesystem_staging_headroom(cache_path, required_bytes):
+            logger.warning(
+                "Disabling stage_frames_local: need ~%.1f GB on %s but cache filesystem is too full",
+                required_bytes / (1024**3),
+                cache_path,
+            )
+            return False
+        logger.info(
+            "Bulk staging enabled: ~%.1f GB (%s unique files) -> %s",
+            required_bytes / (1024**3),
+            len(collect_unique_frame_paths(records)),
+            cache_path,
+        )
+
+    return True
+
 
 def frame_to_tensor(frame_bgr, height: int, width: int) -> torch.Tensor:
     return torch.from_numpy(frame_to_chw_numpy(frame_bgr, height, width))
@@ -259,6 +378,12 @@ def stage_frame_records(
     return staged
 
 
+def _copy_frame_file(source: Path, destination: Path) -> None:
+    """Copy without sendfile so FUSE→SSD copies fail less often on busy root disks."""
+    with source.open("rb") as src, destination.open("wb") as dst:
+        shutil.copyfileobj(src, dst, length=1024 * 1024)
+
+
 def localize_frame_path(
     source: Path,
     frames_root: Path,
@@ -275,17 +400,7 @@ def localize_frame_path(
     destination = cache_root / relative
     if not destination.exists():
         destination.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            shutil.copy2(source, destination)
-        except OSError as exc:
-            if exc.errno == 28:
-                raise OSError(
-                    exc.errno,
-                    f"{exc.strerror} while staging {source} -> {destination}. "
-                    "Reduce max_frames, disable stage_frames_local, or use a custom "
-                    "Docker image so pip/venv does not fill the root filesystem.",
-                ) from exc
-            raise
+        _copy_frame_file(source, destination)
     localized[source] = destination
     return destination
 
@@ -305,6 +420,8 @@ class KvasirPreprocessedFrameDataset(Dataset[FrameSample]):
         stage_frames_local: bool = False,
         local_frame_cache: Path | None = None,
         staging_progress_callback: Callable[[int, int], None] | None = None,
+        max_staged_files: int | None = None,
+        stage_mode: str | None = None,
     ) -> None:
         self.frames_root = frames_root
         manifest_path = frames_root / PREPROCESSED_MANIFEST
@@ -325,35 +442,94 @@ class KvasirPreprocessedFrameDataset(Dataset[FrameSample]):
         if not records:
             raise FileNotFoundError(f"No preprocessed frames under {frames_root} for split={split!r}")
 
+        resolved_stage_mode = stage_mode or STAGE_MODE_LAZY
         self.stage_frames_local = bool(stage_frames_local and local_frame_cache is not None)
         self.local_frame_cache = local_frame_cache
+        self._max_staged_files = max_staged_files
         self._localized_paths: dict[Path, Path] = {}
         self._staging_progress_callback = staging_progress_callback
         self._staging_progress_every = max(1, len(records) // 20)
         self._staging_completed = 0
+        self._staging_fallback_logged = False
 
         if self.stage_frames_local and local_frame_cache is not None:
-            local_frame_cache.mkdir(parents=True, exist_ok=True)
-            logger.info(
-                "Lazy local staging enabled: frames copy to %s on first dataloader access",
-                local_frame_cache,
-            )
+            if resolved_stage_mode == STAGE_MODE_LAZY and max_frames is not None and int(max_frames) > DEFAULT_MAX_STAGE_FRAMES:
+                logger.warning(
+                    "Disabling stage_frames_local: max_frames=%s exceeds safe lazy limit %s. "
+                    "Set stage_mode=bulk to copy frames to extended SSD before training.",
+                    max_frames,
+                    DEFAULT_MAX_STAGE_FRAMES,
+                )
+                self.stage_frames_local = False
+            elif resolved_stage_mode == STAGE_MODE_BULK:
+                required_bytes = estimate_staging_bytes(records)
+                if cache_filesystem_staging_headroom(local_frame_cache, required_bytes):
+                    local_frame_cache.mkdir(parents=True, exist_ok=True)
+                    logger.info(
+                        "Bulk staging %s unique files (~%.1f GB) from S3 to %s",
+                        len(collect_unique_frame_paths(records)),
+                        required_bytes / (1024**3),
+                        local_frame_cache,
+                    )
+                    records = stage_frame_records(
+                        records,
+                        frames_root,
+                        local_frame_cache,
+                        progress_callback=staging_progress_callback,
+                    )
+                    self.stage_frames_local = False
+                else:
+                    logger.warning(
+                        "Disabling stage_frames_local: need ~%.1f GB on %s but cache filesystem is too full",
+                        required_bytes / (1024**3),
+                        local_frame_cache,
+                    )
+                    self.stage_frames_local = False
+            else:
+                local_frame_cache.mkdir(parents=True, exist_ok=True)
+                logger.info(
+                    "Lazy local staging enabled: frames copy to %s on first dataloader access",
+                    local_frame_cache,
+                )
 
         self.records = records
 
     def __len__(self) -> int:
         return len(self.records)
 
+    def _disable_local_staging(self, reason: str) -> None:
+        if not self._staging_fallback_logged:
+            logger.warning(reason)
+            self._staging_fallback_logged = True
+        self.stage_frames_local = False
+
     def _resolve_frame_path(self, source: Path) -> Path:
         if not self.stage_frames_local or self.local_frame_cache is None:
             return source
+        if self._max_staged_files is not None and len(self._localized_paths) >= self._max_staged_files:
+            return source
+        if not root_filesystem_staging_headroom():
+            self._disable_local_staging(
+                "Root filesystem above 85% capacity; reading frames directly from S3 mount"
+            )
+            return source
         had = len(self._localized_paths)
-        resolved = localize_frame_path(
-            source,
-            self.frames_root,
-            self.local_frame_cache,
-            self._localized_paths,
-        )
+        try:
+            resolved = localize_frame_path(
+                source,
+                self.frames_root,
+                self.local_frame_cache,
+                self._localized_paths,
+            )
+        except OSError as exc:
+            if exc.errno != 28:
+                raise
+            self._disable_local_staging(
+                f"No space left on device while staging {source}; "
+                "reading remaining frames directly from S3 mount"
+            )
+            self._localized_paths[source] = source
+            return source
         if len(self._localized_paths) > had:
             self._staging_completed += 1
             callback = self._staging_progress_callback

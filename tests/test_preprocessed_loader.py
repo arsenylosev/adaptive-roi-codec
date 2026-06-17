@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 
 from adaptive_roi_codec.utils.frame_io import FRAME_CACHE_SUFFIX, save_preprocessed_frame
@@ -11,7 +12,12 @@ from adaptive_roi_codec.utils.kvasir_loader import (
     PREPROCESSED_MANIFEST,
     FrameRecord,
     KvasirPreprocessedFrameDataset,
+    STAGE_MODE_BULK,
+    STAGE_MODE_LAZY,
     load_preprocessed_manifest,
+    resolve_max_staged_files,
+    resolve_stage_mode,
+    should_stage_frames_locally,
     stage_frame_records,
 )
 
@@ -125,6 +131,7 @@ def test_preprocessed_dataset_lazy_staging_on_getitem(tmp_path: Path) -> None:
         frames_root,
         split="",
         stage_frames_local=True,
+        stage_mode=STAGE_MODE_LAZY,
         local_frame_cache=cache_root,
     )
     assert not cache_root.exists() or list(cache_root.rglob("*.npy")) == []
@@ -132,6 +139,102 @@ def test_preprocessed_dataset_lazy_staging_on_getitem(tmp_path: Path) -> None:
     sample = dataset[0]
     assert sample.frame.shape == (3, 336, 336)
     assert list(cache_root.rglob("*.npy"))
+
+
+def test_should_stage_frames_local_disabled_for_large_max_frames_lazy_mode() -> None:
+    enabled = should_stage_frames_locally(
+        {"stage_frames_local": True, "max_frames": 48000, "stage_mode": STAGE_MODE_LAZY},
+        {"max_train_batches": 4000, "batch_size": 12},
+        cache_path=Path("/tmp/cache"),
+    )
+    assert enabled is False
+
+
+def test_resolve_stage_mode_defaults_to_bulk_when_staging_enabled() -> None:
+    assert resolve_stage_mode({"stage_frames_local": True}) == STAGE_MODE_BULK
+    assert resolve_stage_mode({"stage_frames_local": False}) == STAGE_MODE_LAZY
+
+
+def test_preprocessed_dataset_bulk_staging_on_init(tmp_path: Path) -> None:
+    frames_root = tmp_path / "frames"
+    source = frames_root / "v1" / f"frame_000000{FRAME_CACHE_SUFFIX}"
+    save_preprocessed_frame(np.zeros((3, 336, 336), dtype=np.float32), source)
+    manifest = frames_root / PREPROCESSED_MANIFEST
+    manifest.write_text(
+        json.dumps(
+            {
+                "video_id": "v1",
+                "frame_index": 0,
+                "path": str(source),
+                "prev_path": None,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    cache_root = tmp_path / "cache"
+
+    dataset = KvasirPreprocessedFrameDataset(
+        frames_root,
+        split="",
+        stage_frames_local=True,
+        stage_mode=STAGE_MODE_BULK,
+        local_frame_cache=cache_root,
+    )
+    assert dataset.stage_frames_local is False
+    assert dataset.records[0].path.is_relative_to(cache_root)
+    assert list(cache_root.rglob("*.npy"))
+
+
+def test_resolve_max_staged_files_from_training_caps() -> None:
+    assert (
+        resolve_max_staged_files(
+            {"max_frames": 48000},
+            {"max_train_batches": 200, "batch_size": 12},
+        )
+        == 4800
+    )
+
+
+def test_dataset_falls_back_to_source_on_enospc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frames_root = tmp_path / "frames"
+    source = frames_root / "v1" / f"frame_000000{FRAME_CACHE_SUFFIX}"
+    save_preprocessed_frame(np.zeros((3, 336, 336), dtype=np.float32), source)
+    manifest = frames_root / PREPROCESSED_MANIFEST
+    manifest.write_text(
+        json.dumps(
+            {
+                "video_id": "v1",
+                "frame_index": 0,
+                "path": str(source),
+                "prev_path": None,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    cache_root = tmp_path / "cache"
+
+    def boom(*_args, **_kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(
+        "adaptive_roi_codec.utils.kvasir_loader.localize_frame_path",
+        boom,
+    )
+
+    dataset = KvasirPreprocessedFrameDataset(
+        frames_root,
+        split="",
+        stage_frames_local=True,
+        stage_mode=STAGE_MODE_LAZY,
+        local_frame_cache=cache_root,
+    )
+    sample = dataset[0]
+    assert sample.frame.shape == (3, 336, 336)
+    assert dataset.stage_frames_local is False
 
 
 def test_load_preprocessed_manifest_resolves_relative_paths(tmp_path: Path) -> None:

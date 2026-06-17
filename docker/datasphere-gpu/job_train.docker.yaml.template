@@ -1,0 +1,53 @@
+# Example DataSphere Jobs config using a project Docker resource (DataSphere storage).
+# Build the image in-project (see docker/datasphere-gpu/Dockerfile), activate it,
+# then replace <datasphere-docker-resource-id> with the resource id (bxxxxxxxx...).
+#
+# Benefits vs env.python pip bootstrap:
+#   - No ~3 GB pip install on root overlay each job
+#   - Faster cold start (image cached inside DataSphere)
+#
+# Keep code/configs as job inputs so you can iterate without rebuilding the image.
+
+name: ${JOB_NAME}
+desc: ${JOB_DESC}
+
+cmd: python -m adaptive_roi_codec.jobs.run_train --config ${CONFIG} --params ${PARAMS} --metrics-out ${METRICS} --status-out ${JOB_STATUS}
+
+env:
+  docker: <datasphere-docker-resource-id>
+  vars:
+    - PYTHONPATH: /job
+    - TRAIN_REQUIRE_CUDA: "1"
+    - S3_CONNECTOR_ID: ${S3_CONNECTOR_ID}
+    - S3_DATA_PREFIX: ${S3_DATA_PREFIX}
+    - S3_CHECKPOINT_SUBDIR: ${S3_CHECKPOINT_SUBDIR}
+    - FRAMES_OUTPUT_DIR: ${FRAMES_S3_DIR}
+    - DATASPHERE_LOCAL_CHECKPOINT_DIR: /servant/jobs/extended_working_storage/checkpoints
+    - DATASPHERE_LOCAL_FRAME_CACHE: /servant/jobs/extended_working_storage/frame_cache
+    - DATASPHERE_LOCAL_PIP_CACHE: /servant/jobs/extended_working_storage/pip_cache
+    - PIP_CACHE_DIR: /servant/jobs/extended_working_storage/pip_cache
+    - XDG_CACHE_HOME: /servant/jobs/extended_working_storage/xdg_cache
+    - TMPDIR: /servant/jobs/extended_working_storage/tmp
+    - TORCH_HOME: /servant/jobs/extended_working_storage/torch_home
+    - TRAIN_BATCH_SIZE: ${TRAIN_BATCH_SIZE}
+    - TQDM_DISABLE: "1"
+    - PYTHONUNBUFFERED: "1"
+
+inputs:
+  - configs/base.yaml: CONFIG
+  - ${PARAMS_INPUT}: PARAMS
+  - adaptive_roi_codec: adaptive_roi_codec
+
+outputs:
+  - train_metrics.json: METRICS
+  - job_status.json: JOB_STATUS
+
+s3-mounts:
+  - ${S3_CONNECTOR_ID}
+
+cloud-instance-types:
+  - g1.1
+
+working-storage:
+  type: SSD
+  size: ${WORKING_STORAGE_GB}Gb

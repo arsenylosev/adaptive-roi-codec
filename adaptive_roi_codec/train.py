@@ -30,7 +30,10 @@ from adaptive_roi_codec.utils.kvasir_loader import (
     KvasirPreprocessedFrameDataset,
     KvasirVideoFrameDataset,
     SyntheticFrameDataset,
+    STAGE_MODE_LAZY,
     collate_frame_samples,
+    resolve_max_staged_files,
+    resolve_stage_mode,
 )
 
 logging.basicConfig(
@@ -150,7 +153,13 @@ def build_dataloader(
     configure_multiprocessing(num_workers)
     prefetch_factor = int(data_cfg.get("prefetch_factor", 2))
     local_frame_cache = resolve_local_frame_cache(config)
-    stage_frames_local = bool(data_cfg.get("stage_frames_local", False)) and local_frame_cache is not None
+    stage_mode = resolve_stage_mode(data_cfg)
+    stage_frames_local = bool(data_cfg.get("stage_frames_local") and local_frame_cache is not None)
+    max_staged_files = (
+        resolve_max_staged_files(data_cfg, training)
+        if stage_frames_local and stage_mode == STAGE_MODE_LAZY
+        else None
+    )
     max_frames = data_cfg.get("max_frames")
 
     if dry_run or optional_env("TRAIN_DRY_RUN", "").lower() in {"1", "true", "yes"}:
@@ -181,14 +190,19 @@ def build_dataloader(
             splits_subdir=data_cfg.get("splits_subdir", "splits"),
             max_frames=int(max_frames) if max_frames is not None else None,
             stage_frames_local=stage_frames_local,
+            stage_mode=stage_mode,
             local_frame_cache=local_frame_cache,
             staging_progress_callback=progress.staging if progress else None,
+            max_staged_files=max_staged_files,
         )
         logger.info(
-            "Preprocessed frame count: %s (max_frames=%s stage_local=%s num_workers=%s)",
+            "Preprocessed frame count: %s (max_frames=%s stage_local=%s stage_mode=%s "
+            "max_staged_files=%s num_workers=%s)",
             len(dataset),
             max_frames,
-            stage_frames_local,
+            dataset.stage_frames_local,
+            stage_mode,
+            max_staged_files,
             num_workers,
         )
         loader_kwargs: dict = {
@@ -200,7 +214,7 @@ def build_dataloader(
         }
         if num_workers > 0:
             loader_kwargs["prefetch_factor"] = prefetch_factor
-            loader_kwargs["persistent_workers"] = not is_datasphere_job()
+            loader_kwargs["persistent_workers"] = True
         return DataLoader(dataset, **loader_kwargs)
 
     dataset = KvasirVideoFrameDataset(
@@ -226,7 +240,7 @@ def build_dataloader(
         num_workers=num_workers,
         pin_memory=pin_memory,
         collate_fn=collate_frame_samples,
-        persistent_workers=num_workers > 0 and not is_datasphere_job(),
+        persistent_workers=num_workers > 0,
     )
 
 
