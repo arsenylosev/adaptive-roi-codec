@@ -36,6 +36,7 @@ data/
 .vscode/
 .DS_Store
 *.swp
+.cursor/
 
 # Datasphere job logs
 job_progress.jsonl
