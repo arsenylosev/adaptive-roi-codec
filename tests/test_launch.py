@@ -10,10 +10,13 @@ from adaptive_roi_codec.jobs.launch import (
     EXTRACT_TEMPLATE,
     format_train_job_desc,
     format_train_job_name,
+    is_smoke_train_params,
     materialize_train_params,
     params_input_path,
     render_template,
     resolve_datasphere_cli,
+    resolve_train_job_base_desc,
+    resolve_train_job_base_name,
     write_generated_config,
     yaml_quote,
 )
@@ -41,7 +44,8 @@ def test_rendered_job_config_is_valid_yaml_with_required_sections(tmp_path: Path
     assert config["s3-mounts"] == ["connector-test"]
     assert "g1.1" in config["cloud-instance-types"]
     assert config["cmd"] == (
-        "python -m adaptive_roi_codec.train --config ${CONFIG} --params ${PARAMS}"
+        "python -m adaptive_roi_codec.jobs.run_train --config ${CONFIG} --params ${PARAMS} "
+        "--metrics-out ${METRICS} --status-out ${JOB_STATUS}"
     )
     assert "\n" not in config["cmd"]
     assert config["inputs"][1] == {"jobs/inputs/train_smoke.json": "PARAMS"}
@@ -51,6 +55,10 @@ def test_rendered_job_config_is_valid_yaml_with_required_sections(tmp_path: Path
     assert str(env_vars["TRAIN_BATCH_SIZE"]) == "12"
     assert env_vars["TQDM_DISABLE"] == "1"
     assert env_vars["PYTHONUNBUFFERED"] == "1"
+    assert config["outputs"] == [
+        {"train_metrics.json": "METRICS"},
+        {"job_status.json": "JOB_STATUS"},
+    ]
 
 
 def test_materialize_train_params_writes_batch_size_override(tmp_path: Path, monkeypatch) -> None:
@@ -76,6 +84,16 @@ def test_train_job_name_and_desc_include_batch_size() -> None:
     assert format_train_job_name("vae-capsule-train", 12) == "vae-capsule-train-bs12"
     assert format_train_job_desc("GPU training", 12) == "GPU training (batch_size=12)"
     assert format_train_job_name("vae-capsule-train", None) == "vae-capsule-train"
+
+
+def test_smoke_params_select_smoke_job_name(tmp_path: Path) -> None:
+    smoke_params = tmp_path / "smoke.json"
+    smoke_params.write_text(
+        json.dumps({"training": {"max_train_batches": 200}, "data": {"max_frames": 2400}}),
+        encoding="utf-8",
+    )
+    assert is_smoke_train_params(json.loads(smoke_params.read_text(encoding="utf-8")))
+    assert resolve_train_job_base_name(smoke_params) == "vae-capsule-smoke-train"
 
 
 def test_params_input_path_must_be_inside_repo(tmp_path: Path) -> None:
@@ -137,3 +155,18 @@ def test_write_generated_config_persists_file(tmp_path: Path, monkeypatch) -> No
 
     assert path.exists()
     assert yaml.safe_load(path.read_text(encoding="utf-8"))["name"] == "smoke"
+
+
+def test_smoke_job_name_ignores_env_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    smoke_params = tmp_path / "train_smoke.json"
+    smoke_params.write_text(
+        json.dumps({"job_profile": "smoke", "training": {"max_train_batches": 10}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DATASPHERE_JOB_NAME", "vae-capsule-frame-extraction")
+    monkeypatch.setenv("DATASPHERE_JOB_DESC", "Extraction of frames")
+
+    assert resolve_train_job_base_name(smoke_params) == "vae-capsule-smoke-train"
+    assert "smoke" in resolve_train_job_base_desc(smoke_params).lower()

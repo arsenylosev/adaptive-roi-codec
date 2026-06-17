@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import gc
 import json
 import logging
@@ -13,6 +14,7 @@ import time
 from pathlib import Path
 
 import torch
+import torch.multiprocessing as mp
 from torch.utils.data import DataLoader
 
 from adaptive_roi_codec.losses.clinical_loss import ClinicalLoss, LossWeights
@@ -21,8 +23,9 @@ from adaptive_roi_codec.model.roi_detector import ROIDetector
 from adaptive_roi_codec.model.vae_codec import VAECodec
 from adaptive_roi_codec.utils.config import load_yaml, merge_dicts
 from adaptive_roi_codec.utils.device import resolve_training_device
+from adaptive_roi_codec.utils.datasphere_exit import finalize_datasphere_job
 from adaptive_roi_codec.utils.env import load_project_env, optional_env, s3_mount_root
-from adaptive_roi_codec.utils.job_progress import report_job_progress
+from adaptive_roi_codec.utils.job_progress import JobProgressTracker
 from adaptive_roi_codec.utils.kvasir_loader import (
     KvasirPreprocessedFrameDataset,
     KvasirVideoFrameDataset,
@@ -104,14 +107,47 @@ def resolve_local_frame_cache(config: dict) -> Path | None:
     return Path(local_path) if local_path else None
 
 
-def build_dataloader(config: dict, dry_run: bool, device: torch.device) -> DataLoader:
+def is_datasphere_job() -> bool:
+    return bool(os.getenv("JOB_PROGRESS_FILENAME"))
+
+
+def configure_multiprocessing(num_workers: int) -> None:
+    """Use spawn only when DataLoader workers are enabled."""
+    if num_workers <= 0:
+        return
+    try:
+        mp.set_start_method("spawn", force=True)
+    except RuntimeError:
+        pass
+
+
+@contextlib.contextmanager
+def redirect_stderr_to_stdout():
+    """Torchvision weight downloads write progress bars to stderr."""
+    stderr_fd = sys.stderr.fileno()
+    saved_fd = os.dup(stderr_fd)
+    try:
+        os.dup2(sys.stdout.fileno(), stderr_fd)
+        yield
+    finally:
+        os.dup2(saved_fd, stderr_fd)
+        os.close(saved_fd)
+
+
+def build_dataloader(
+    config: dict,
+    dry_run: bool,
+    *,
+    pin_memory: bool,
+    progress: JobProgressTracker | None = None,
+) -> DataLoader:
     training = config["training"]
     data_cfg = config.get("data", {})
     model_cfg = config["model"]
     batch_size = training["batch_size"]
     width, height = model_cfg["input_res"]
     num_workers = int(data_cfg.get("num_workers", 0))
-    pin_memory = device.type == "cuda"
+    configure_multiprocessing(num_workers)
     prefetch_factor = int(data_cfg.get("prefetch_factor", 2))
     local_frame_cache = resolve_local_frame_cache(config)
     stage_frames_local = bool(data_cfg.get("stage_frames_local", False)) and local_frame_cache is not None
@@ -146,6 +182,7 @@ def build_dataloader(config: dict, dry_run: bool, device: torch.device) -> DataL
             max_frames=int(max_frames) if max_frames is not None else None,
             stage_frames_local=stage_frames_local,
             local_frame_cache=local_frame_cache,
+            staging_progress_callback=progress.staging if progress else None,
         )
         logger.info(
             "Preprocessed frame count: %s (max_frames=%s stage_local=%s num_workers=%s)",
@@ -163,7 +200,7 @@ def build_dataloader(config: dict, dry_run: bool, device: torch.device) -> DataL
         }
         if num_workers > 0:
             loader_kwargs["prefetch_factor"] = prefetch_factor
-            loader_kwargs["persistent_workers"] = True
+            loader_kwargs["persistent_workers"] = not is_datasphere_job()
         return DataLoader(dataset, **loader_kwargs)
 
     dataset = KvasirVideoFrameDataset(
@@ -189,29 +226,59 @@ def build_dataloader(config: dict, dry_run: bool, device: torch.device) -> DataL
         num_workers=num_workers,
         pin_memory=pin_memory,
         collate_fn=collate_frame_samples,
-        persistent_workers=num_workers > 0,
+        persistent_workers=num_workers > 0 and not is_datasphere_job(),
     )
 
 
 def shutdown_dataloader(loader: DataLoader | None) -> None:
     """Stop DataLoader worker processes so the job exits with status 0."""
-    if loader is None or loader.num_workers == 0:
+    if loader is None:
         return
+
     iterator = getattr(loader, "_iterator", None)
     if iterator is not None:
-        iterator._shutdown_workers()
+        try:
+            iterator._shutdown_workers()
+        except Exception:
+            logger.warning("DataLoader worker shutdown raised; continuing cleanup")
         loader._iterator = None
+
+    workers = list(getattr(loader, "_workers", []) or [])
+    for worker in workers:
+        if worker.is_alive():
+            worker.join(timeout=2.0)
+        if worker.is_alive():
+            worker.terminate()
+            worker.join(timeout=1.0)
+
     del loader
     gc.collect()
+    if is_datasphere_job():
+        from adaptive_roi_codec.utils.datasphere_exit import terminate_multiprocessing_children
+
+        terminate_multiprocessing_children()
 
 
-def flush_logs_and_exit(code: int = 0) -> None:
-    """Flush logs and filesystem so DataSphere can collect job outputs before exit."""
-    logging.shutdown()
+def _release_training_models(
+    *,
+    codec: VAECodec | None,
+    roi_detector: ROIDetector | None,
+    optimizer: torch.optim.Optimizer | None,
+    device: torch.device,
+) -> None:
+    del codec, roi_detector, optimizer
+    gc.collect()
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+
+
+def finalize_job_exit(code: int = 0) -> None:
+    """Exit cleanly so DataSphere marks the job as Success."""
+    if is_datasphere_job():
+        code = finalize_datasphere_job(code)
     sys.stdout.flush()
     sys.stderr.flush()
-    if hasattr(os, "sync"):
-        os.sync()
     sys.exit(code)
 
 
@@ -355,7 +422,8 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
         config = merge_dicts(config, params)
 
     device = resolve_training_device()
-    if device.type == "cuda":
+    use_cuda = device.type == "cuda"
+    if use_cuda:
         torch.backends.cudnn.benchmark = True
 
     model_cfg = config["model"]
@@ -375,8 +443,42 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
         training_cfg["batch_size"],
     )
 
-    roi_detector = ROIDetector(input_size=config["roi_detector"]["input_res"]).to(device)
-    codec = VAECodec(latent_channels=model_cfg["latent_ch"]).to(device)
+    epochs = 1 if dry_run else training_cfg["epochs"]
+    max_train_batches = training_cfg.get("max_train_batches")
+    if max_train_batches is not None:
+        max_train_batches = int(max_train_batches)
+
+    progress = JobProgressTracker(
+        total_batches=max_train_batches if max_train_batches is not None else 1,
+        epochs=epochs,
+    )
+    progress.setup("Initializing training pipeline")
+
+    loader = build_dataloader(
+        config,
+        dry_run=dry_run,
+        pin_memory=use_cuda,
+        progress=progress,
+    )
+    if max_train_batches is not None:
+        total_batches = min(len(loader), max_train_batches) if not dry_run else 1
+    else:
+        total_batches = len(loader) if not dry_run else 1
+    progress.total_batches = max(total_batches, 1)
+
+    skip_checkpoint = bool(training_cfg.get("skip_checkpoint", False))
+    checkpoint_dir = resolve_checkpoint_dir(config)
+    save_every = config.get("checkpoints", {}).get("save_every_epochs", 5)
+    roi_cfg = config.get("roi_detector", {})
+    pretrained_backbone = bool(roi_cfg.get("pretrained", True))
+
+    with redirect_stderr_to_stdout():
+        roi_detector = ROIDetector(
+            input_size=int(roi_cfg.get("input_res", roi_cfg.get("input_size", height))),
+            pretrained=pretrained_backbone,
+        ).to(device)
+        codec = VAECodec(latent_channels=model_cfg["latent_ch"]).to(device)
+    progress.setup("Models loaded on GPU")
     quantizer = AdaptiveQuantizer(
         q_min=quant_cfg["q_min"],
         q_max=quant_cfg["q_max"],
@@ -395,20 +497,7 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
     params = list(codec.parameters()) + list(roi_detector.parameters())
     optimizer = torch.optim.Adam(params, lr=training_cfg["lr"])
 
-    loader = build_dataloader(config, dry_run=dry_run, device=device)
-    max_train_batches = training_cfg.get("max_train_batches")
-    if max_train_batches is not None:
-        max_train_batches = int(max_train_batches)
-        total_batches = min(len(loader), max_train_batches) if not dry_run else 1
-    else:
-        total_batches = len(loader) if not dry_run else 1
-    skip_checkpoint = bool(training_cfg.get("skip_checkpoint", False))
-    checkpoint_dir = resolve_checkpoint_dir(config)
-    save_every = config.get("checkpoints", {}).get("save_every_epochs", 5)
-
-    epochs = 1 if dry_run else training_cfg["epochs"]
     last_metrics: dict[str, float] = {}
-    report_job_progress(0, f"Starting training: batch_size={training_cfg['batch_size']}")
 
     data_wait_total = 0.0
     compute_total = 0.0
@@ -462,12 +551,8 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
                         data_wait_total / batches,
                         compute_total / batches,
                     )
-                    if total_batches > 0:
-                        epoch_progress = (epoch - 1 + batches / total_batches) / epochs
-                        report_job_progress(
-                            int(epoch_progress * 100),
-                            f"epoch {epoch}/{epochs} batch {batches}/{total_batches}",
-                        )
+                if total_batches > 0:
+                    progress.training(epoch=epoch, batch=batches)
 
                 if dry_run:
                     break
@@ -499,10 +584,17 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
             torch.cuda.synchronize()
             torch.cuda.empty_cache()
 
-    metrics_path = Path(optional_env("TRAIN_METRICS_PATH", "metrics/train_metrics.json"))
+    metrics_path = Path(optional_env("TRAIN_METRICS_PATH", "train_metrics.json"))
+    progress.finalize("Writing metrics")
     write_metrics_file(metrics_path, last_metrics)
-    report_job_progress(100, "Training finished successfully")
+    progress.complete("Training finished successfully")
     logger.info("Training finished successfully")
+    _release_training_models(
+        codec=codec,
+        roi_detector=roi_detector,
+        optimizer=optimizer,
+        device=device,
+    )
     return last_metrics
 
 
@@ -512,8 +604,8 @@ def main() -> None:
         train(args.config, args.params, dry_run=args.dry_run)
     except Exception:
         logger.exception("Training failed")
-        flush_logs_and_exit(1)
-    flush_logs_and_exit(0)
+        finalize_job_exit(1)
+    finalize_job_exit(0)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 name: ${JOB_NAME}
 desc: ${JOB_DESC}
 
-cmd: python -m adaptive_roi_codec.train --config ${CONFIG} --params ${PARAMS}
+cmd: python -m adaptive_roi_codec.jobs.run_train --config ${CONFIG} --params ${PARAMS} --metrics-out ${METRICS} --status-out ${JOB_STATUS}
 
 env:
   python:
@@ -20,9 +20,11 @@ env:
     - S3_DATA_PREFIX: ${S3_DATA_PREFIX}
     - S3_CHECKPOINT_SUBDIR: ${S3_CHECKPOINT_SUBDIR}
     - FRAMES_OUTPUT_DIR: ${FRAMES_S3_DIR}
-    - TRAIN_METRICS_PATH: metrics/train_metrics.json
     - DATASPHERE_LOCAL_CHECKPOINT_DIR: /servant/jobs/extended_working_storage/checkpoints
     - DATASPHERE_LOCAL_FRAME_CACHE: /servant/jobs/extended_working_storage/frame_cache
+    - DATASPHERE_LOCAL_PIP_CACHE: /servant/jobs/extended_working_storage/pip_cache
+    - PIP_CACHE_DIR: /servant/jobs/extended_working_storage/pip_cache
+    - XDG_CACHE_HOME: /servant/jobs/extended_working_storage/xdg_cache
     - TORCH_HOME: /servant/jobs/extended_working_storage/torch_home
     - TRAIN_BATCH_SIZE: ${TRAIN_BATCH_SIZE}
     - TQDM_DISABLE: "1"
@@ -34,7 +36,8 @@ inputs:
   - jobs/requirements-datasphere-gpu.txt
 
 outputs:
-  - metrics/train_metrics.json: METRICS
+  - train_metrics.json: METRICS
+  - job_status.json: JOB_STATUS
 
 s3-mounts:
   - ${S3_CONNECTOR_ID}
@@ -46,7 +49,3 @@ cloud-instance-types:
 working-storage:
   type: SSD
   size: ${WORKING_STORAGE_GB}Gb
-
-graceful-shutdown:
-  signal: SIGTERM
-  timeout: 120s

@@ -28,6 +28,13 @@ EXTRACT_TEMPLATE = REPO_ROOT / "jobs" / "configs" / "job_extract_frames.yaml.tem
 GENERATED_DIR = REPO_ROOT / "jobs" / "configs" / ".generated"
 GENERATED_TRAIN_PARAMS = GENERATED_DIR / "train_params.json"
 DEFAULT_TRAIN_JOB_NAME = "vae-capsule-train"
+DEFAULT_SMOKE_TRAIN_JOB_NAME = "vae-capsule-smoke-train"
+DEFAULT_SMOKE_TRAIN_JOB_DESC = (
+    "GPU smoke training: preprocessed Kvasir frames, capped batches for pipeline validation"
+)
+DEFAULT_FULL_TRAIN_JOB_DESC = (
+    "VAE codec training on Kvasir-Capsule with adaptive ROI quantization"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -150,6 +157,34 @@ def materialize_train_params(params_path: Path, batch_size: int | None) -> Path:
     return GENERATED_TRAIN_PARAMS
 
 
+def is_smoke_train_params(params: dict) -> bool:
+    if params.get("job_profile") == "smoke":
+        return True
+    training = params.get("training", {})
+    data = params.get("data", {})
+    return training.get("max_train_batches") is not None or data.get("max_frames") is not None
+
+
+def resolve_train_job_base_name(params_path: Path) -> str:
+    params = load_params(params_path)
+    if is_smoke_train_params(params):
+        return DEFAULT_SMOKE_TRAIN_JOB_NAME
+    env_name = os.getenv("DATASPHERE_JOB_NAME")
+    if env_name:
+        return env_name
+    return DEFAULT_TRAIN_JOB_NAME
+
+
+def resolve_train_job_base_desc(params_path: Path) -> str:
+    params = load_params(params_path)
+    if is_smoke_train_params(params):
+        return DEFAULT_SMOKE_TRAIN_JOB_DESC
+    env_desc = os.getenv("DATASPHERE_JOB_DESC")
+    if env_desc:
+        return env_desc
+    return DEFAULT_FULL_TRAIN_JOB_DESC
+
+
 def format_train_job_name(base_name: str, batch_size: int | None) -> str:
     if batch_size is None:
         return base_name
@@ -189,13 +224,10 @@ def build_context(args: argparse.Namespace) -> dict[str, str]:
         )
         params_path = args.params
     else:
-        base_name = os.getenv("DATASPHERE_JOB_NAME", DEFAULT_TRAIN_JOB_NAME)
-        base_desc = os.getenv(
-            "DATASPHERE_JOB_DESC",
-            "VAE codec training on Kvasir-Capsule with adaptive ROI quantization",
-        )
         batch_size = resolve_batch_size(args.params, args.batch_size)
         params_path = materialize_train_params(args.params, args.batch_size)
+        base_name = resolve_train_job_base_name(params_path)
+        base_desc = resolve_train_job_base_desc(params_path)
         job_name = format_train_job_name(base_name, batch_size)
         job_desc = format_train_job_desc(base_desc, batch_size)
 
@@ -291,10 +323,14 @@ def main() -> None:
             resolve_datasphere_cli()
         except FileNotFoundError as exc:
             raise SystemExit(str(exc)) from exc
+        params_for_mode = load_params(materialize_train_params(args.params, args.batch_size))
+        wait_for_completion = args.sync or (
+            args.job == "train" and is_smoke_train_params(params_for_mode)
+        )
         execute_job(
             context["DATASPHERE_PROJECT_ID"],
             config_path,
-            async_mode=not args.sync,
+            async_mode=not wait_for_completion,
             async_output=args.async_output,
         )
         return

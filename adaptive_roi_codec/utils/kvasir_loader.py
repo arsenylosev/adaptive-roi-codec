@@ -7,7 +7,7 @@ import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 import cv2
 import numpy as np
@@ -230,10 +230,14 @@ def stage_frame_records(
     records: list[FrameRecord],
     frames_root: Path,
     cache_root: Path,
+    *,
+    progress_callback: Callable[[int, int], None] | None = None,
+    progress_every: int = 50,
 ) -> list[FrameRecord]:
     """Copy referenced frame files from S3 FUSE to local SSD for faster random reads."""
     cache_root.mkdir(parents=True, exist_ok=True)
     localized: dict[Path, Path] = {}
+    total = len(records)
 
     def localize(source: Path) -> Path:
         if source in localized:
@@ -250,7 +254,7 @@ def stage_frame_records(
         return destination
 
     staged: list[FrameRecord] = []
-    for record in records:
+    for index, record in enumerate(records, start=1):
         staged.append(
             FrameRecord(
                 video_id=record.video_id,
@@ -259,6 +263,9 @@ def stage_frame_records(
                 prev_path=localize(record.prev_path) if record.prev_path is not None else None,
             )
         )
+        if progress_callback and (index == total or index % progress_every == 0):
+            progress_callback(index, total)
+
     logger.info("Staged %s frame records under %s", len(staged), cache_root)
     return staged
 
@@ -277,6 +284,7 @@ class KvasirPreprocessedFrameDataset(Dataset[FrameSample]):
         max_frames: int | None = None,
         stage_frames_local: bool = False,
         local_frame_cache: Path | None = None,
+        staging_progress_callback: Callable[[int, int], None] | None = None,
     ) -> None:
         self.frames_root = frames_root
         manifest_path = frames_root / PREPROCESSED_MANIFEST
@@ -298,7 +306,12 @@ class KvasirPreprocessedFrameDataset(Dataset[FrameSample]):
             raise FileNotFoundError(f"No preprocessed frames under {frames_root} for split={split!r}")
 
         if stage_frames_local and local_frame_cache is not None:
-            records = stage_frame_records(records, frames_root, local_frame_cache)
+            records = stage_frame_records(
+                records,
+                frames_root,
+                local_frame_cache,
+                progress_callback=staging_progress_callback,
+            )
 
         self.records = records
 

@@ -11,10 +11,17 @@ from torchvision.models import MobileNet_V3_Large_Weights, mobilenet_v3_large
 class ROIDetector(nn.Module):
     """Predicts a soft 3-channel significance mask in [0, 1]."""
 
-    def __init__(self, input_size: int = 336, out_channels: int = 3) -> None:
+    def __init__(
+        self,
+        input_size: int = 336,
+        out_channels: int = 3,
+        *,
+        pretrained: bool = True,
+    ) -> None:
         super().__init__()
         self.input_size = input_size
-        backbone = mobilenet_v3_large(weights=MobileNet_V3_Large_Weights.DEFAULT)
+        weights = MobileNet_V3_Large_Weights.DEFAULT if pretrained else None
+        backbone = mobilenet_v3_large(weights=weights)
         self.encoder = backbone.features
         self.head = nn.Sequential(
             nn.Conv2d(960, 256, kernel_size=3, padding=1),
