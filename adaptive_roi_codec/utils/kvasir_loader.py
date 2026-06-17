@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
 import cv2
+import numpy as np
 import torch
 from torch.utils.data import Dataset, IterableDataset
 
@@ -37,7 +39,8 @@ def frame_to_tensor(frame_bgr, height: int, width: int) -> torch.Tensor:
 def load_frame_tensor(path: Path) -> torch.Tensor:
     suffix = path.suffix.lower()
     if suffix == ".npy":
-        return torch.from_numpy(load_preprocessed_frame_array(path))
+        array = load_preprocessed_frame_array(path)
+        return torch.from_numpy(np.array(array, dtype=np.float32))
     if suffix == ".pt":
         return torch.load(path, map_location="cpu", weights_only=True)
     raise ValueError(f"Unsupported preprocessed frame format: {path}")
@@ -223,6 +226,43 @@ def load_preprocessed_manifest(manifest_path: Path, *, frames_root: Path | None 
     return records
 
 
+def stage_frame_records(
+    records: list[FrameRecord],
+    frames_root: Path,
+    cache_root: Path,
+) -> list[FrameRecord]:
+    """Copy referenced frame files from S3 FUSE to local SSD for faster random reads."""
+    cache_root.mkdir(parents=True, exist_ok=True)
+    localized: dict[Path, Path] = {}
+
+    def localize(source: Path) -> Path:
+        if source in localized:
+            return localized[source]
+        try:
+            relative = source.relative_to(frames_root)
+        except ValueError:
+            relative = Path(source.name)
+        destination = cache_root / relative
+        if not destination.exists():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+        localized[source] = destination
+        return destination
+
+    staged: list[FrameRecord] = []
+    for record in records:
+        staged.append(
+            FrameRecord(
+                video_id=record.video_id,
+                frame_index=record.frame_index,
+                path=localize(record.path),
+                prev_path=localize(record.prev_path) if record.prev_path is not None else None,
+            )
+        )
+    logger.info("Staged %s frame records under %s", len(staged), cache_root)
+    return staged
+
+
 class KvasirPreprocessedFrameDataset(Dataset[FrameSample]):
     """Load 336×336 frames from pre-extracted `.npy` or legacy `.pt` caches (stage-1 output)."""
 
@@ -234,6 +274,9 @@ class KvasirPreprocessedFrameDataset(Dataset[FrameSample]):
         dataset_root: Path | None = None,
         splits_subdir: str = "splits",
         video_ids: list[str] | None = None,
+        max_frames: int | None = None,
+        stage_frames_local: bool = False,
+        local_frame_cache: Path | None = None,
     ) -> None:
         self.frames_root = frames_root
         manifest_path = frames_root / PREPROCESSED_MANIFEST
@@ -248,8 +291,14 @@ class KvasirPreprocessedFrameDataset(Dataset[FrameSample]):
             allowed = set(video_ids)
             records = [record for record in records if record.video_id in allowed]
 
+        if max_frames is not None:
+            records = records[: int(max_frames)]
+
         if not records:
             raise FileNotFoundError(f"No preprocessed frames under {frames_root} for split={split!r}")
+
+        if stage_frames_local and local_frame_cache is not None:
+            records = stage_frame_records(records, frames_root, local_frame_cache)
 
         self.records = records
 

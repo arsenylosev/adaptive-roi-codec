@@ -95,6 +95,15 @@ def resolve_checkpoint_dir(config: dict) -> Path:
     return path
 
 
+def resolve_local_frame_cache(config: dict) -> Path | None:
+    data_cfg = config.get("data", {})
+    env_path = optional_env("DATASPHERE_LOCAL_FRAME_CACHE", "")
+    if env_path:
+        return Path(env_path)
+    local_path = data_cfg.get("local_frame_cache")
+    return Path(local_path) if local_path else None
+
+
 def build_dataloader(config: dict, dry_run: bool, device: torch.device) -> DataLoader:
     training = config["training"]
     data_cfg = config.get("data", {})
@@ -103,6 +112,10 @@ def build_dataloader(config: dict, dry_run: bool, device: torch.device) -> DataL
     width, height = model_cfg["input_res"]
     num_workers = int(data_cfg.get("num_workers", 0))
     pin_memory = device.type == "cuda"
+    prefetch_factor = int(data_cfg.get("prefetch_factor", 2))
+    local_frame_cache = resolve_local_frame_cache(config)
+    stage_frames_local = bool(data_cfg.get("stage_frames_local", False)) and local_frame_cache is not None
+    max_frames = data_cfg.get("max_frames")
 
     if dry_run or optional_env("TRAIN_DRY_RUN", "").lower() in {"1", "true", "yes"}:
         dataset = SyntheticFrameDataset(
@@ -130,17 +143,28 @@ def build_dataloader(config: dict, dry_run: bool, device: torch.device) -> DataL
             split=data_cfg.get("split", "train"),
             dataset_root=dataset_root,
             splits_subdir=data_cfg.get("splits_subdir", "splits"),
+            max_frames=int(max_frames) if max_frames is not None else None,
+            stage_frames_local=stage_frames_local,
+            local_frame_cache=local_frame_cache,
         )
-        logger.info("Preprocessed frame count: %s", len(dataset))
-        return DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=bool(data_cfg.get("shuffle", True)),
-            num_workers=num_workers,
-            pin_memory=pin_memory,
-            collate_fn=collate_frame_samples,
-            persistent_workers=num_workers > 0,
+        logger.info(
+            "Preprocessed frame count: %s (max_frames=%s stage_local=%s num_workers=%s)",
+            len(dataset),
+            max_frames,
+            stage_frames_local,
+            num_workers,
         )
+        loader_kwargs: dict = {
+            "batch_size": batch_size,
+            "shuffle": bool(data_cfg.get("shuffle", True)),
+            "num_workers": num_workers,
+            "pin_memory": pin_memory,
+            "collate_fn": collate_frame_samples,
+        }
+        if num_workers > 0:
+            loader_kwargs["prefetch_factor"] = prefetch_factor
+            loader_kwargs["persistent_workers"] = True
+        return DataLoader(dataset, **loader_kwargs)
 
     dataset = KvasirVideoFrameDataset(
         dataset_root,
@@ -182,11 +206,13 @@ def shutdown_dataloader(loader: DataLoader | None) -> None:
 
 
 def flush_logs_and_exit(code: int = 0) -> None:
-    """Force a clean process exit for DataSphere Jobs (avoid PyTorch atexit hangs)."""
+    """Flush logs and filesystem so DataSphere can collect job outputs before exit."""
     logging.shutdown()
     sys.stdout.flush()
     sys.stderr.flush()
-    os._exit(code)
+    if hasattr(os, "sync"):
+        os.sync()
+    sys.exit(code)
 
 
 def save_checkpoint(
@@ -329,6 +355,8 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
         config = merge_dicts(config, params)
 
     device = resolve_training_device()
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
 
     model_cfg = config["model"]
     training_cfg = config["training"]
@@ -368,13 +396,23 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
     optimizer = torch.optim.Adam(params, lr=training_cfg["lr"])
 
     loader = build_dataloader(config, dry_run=dry_run, device=device)
-    total_batches = len(loader) if not dry_run else 1
+    max_train_batches = training_cfg.get("max_train_batches")
+    if max_train_batches is not None:
+        max_train_batches = int(max_train_batches)
+        total_batches = min(len(loader), max_train_batches) if not dry_run else 1
+    else:
+        total_batches = len(loader) if not dry_run else 1
+    skip_checkpoint = bool(training_cfg.get("skip_checkpoint", False))
     checkpoint_dir = resolve_checkpoint_dir(config)
     save_every = config.get("checkpoints", {}).get("save_every_epochs", 5)
 
     epochs = 1 if dry_run else training_cfg["epochs"]
     last_metrics: dict[str, float] = {}
     report_job_progress(0, f"Starting training: batch_size={training_cfg['batch_size']}")
+
+    data_wait_total = 0.0
+    compute_total = 0.0
+    batch_wait_start = time.perf_counter()
 
     try:
         for epoch in range(1, epochs + 1):
@@ -386,6 +424,8 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
             video_states: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
 
             for batch in loader:
+                data_wait_total += time.perf_counter() - batch_wait_start
+                compute_start = time.perf_counter()
                 if isinstance(batch, torch.Tensor):
                     batch = {
                         "frame": batch,
@@ -409,15 +449,18 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
                 )
                 epoch_loss += avg_batch_loss
                 batches += 1
+                compute_total += time.perf_counter() - compute_start
 
                 if batches % log_every == 0:
                     elapsed = time.perf_counter() - epoch_start
                     logger.info(
-                        "Epoch %s batch %s — loss=%.6f elapsed=%.1fs",
+                        "Epoch %s batch %s — loss=%.6f elapsed=%.1fs data_wait=%.2fs compute=%.2fs",
                         epoch,
                         batches,
                         avg_batch_loss,
                         elapsed,
+                        data_wait_total / batches,
+                        compute_total / batches,
                     )
                     if total_batches > 0:
                         epoch_progress = (epoch - 1 + batches / total_batches) / epochs
@@ -428,6 +471,11 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
 
                 if dry_run:
                     break
+                if max_train_batches is not None and batches >= max_train_batches:
+                    logger.info("Reached max_train_batches=%s", max_train_batches)
+                    break
+
+                batch_wait_start = time.perf_counter()
 
             avg_loss = epoch_loss / max(batches, 1)
             last_metrics = {"epoch": float(epoch), "loss": avg_loss, "batches": float(batches)}
@@ -440,9 +488,11 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
                 time.perf_counter() - epoch_start,
             )
 
-            if epoch % save_every == 0 or epoch == epochs:
+            if not skip_checkpoint and (epoch % save_every == 0 or epoch == epochs):
                 ckpt_path = checkpoint_dir / f"epoch_{epoch:03d}.pt"
                 save_checkpoint(ckpt_path, epoch, codec, roi_detector, optimizer, last_metrics)
+            elif skip_checkpoint:
+                logger.info("Skipping checkpoint save (skip_checkpoint=true)")
     finally:
         shutdown_dataloader(loader)
         if device.type == "cuda":

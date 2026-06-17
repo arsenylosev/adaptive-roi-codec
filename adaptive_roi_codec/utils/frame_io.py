@@ -27,4 +27,4 @@ def save_preprocessed_frame(array: np.ndarray, path: Path) -> None:
 
 
 def load_preprocessed_frame_array(path: Path) -> np.ndarray:
-    return np.load(path)
+    return np.load(path, mmap_mode="r")
