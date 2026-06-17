@@ -1,0 +1,27 @@
+{
+  "job_profile": "smoke",
+  "experiment_id": "smoke-v100-monitor-kappa-2.0",
+  "training": {
+    "epochs": 1,
+    "batch_size": 12,
+    "max_train_batches": 4000,
+    "skip_checkpoint": true,
+    "log_every_batches": 25
+  },
+  "quantizer": {
+    "kappa": 2.0
+  },
+  "roi_detector": {
+    "pretrained": false
+  },
+  "data": {
+    "source": "preprocessed",
+    "split": "train",
+    "max_frames": 48000,
+    "frame_stride": 30,
+    "num_workers": 0,
+    "prefetch_factor": 2,
+    "shuffle": true,
+    "stage_frames_local": true
+  }
+}

@@ -92,6 +92,12 @@ def parse_args() -> argparse.Namespace:
         help="Block until the job finishes (default: submit with --async and return)",
     )
     parser.add_argument(
+        "--async",
+        dest="async_submit",
+        action="store_true",
+        help="Force datasphere --async even for smoke params (overrides smoke sync default)",
+    )
+    parser.add_argument(
         "--async-output",
         type=Path,
         default=GENERATED_DIR / "last_job_execute.json",
@@ -324,9 +330,14 @@ def main() -> None:
         except FileNotFoundError as exc:
             raise SystemExit(str(exc)) from exc
         params_for_mode = load_params(materialize_train_params(args.params, args.batch_size))
-        wait_for_completion = args.sync or (
-            args.job == "train" and is_smoke_train_params(params_for_mode)
-        )
+        if args.sync and args.async_submit:
+            raise SystemExit("Cannot use --sync and --async together")
+        if args.sync:
+            wait_for_completion = True
+        elif args.async_submit:
+            wait_for_completion = False
+        else:
+            wait_for_completion = args.job == "train" and is_smoke_train_params(params_for_mode)
         execute_job(
             context["DATASPHERE_PROJECT_ID"],
             config_path,

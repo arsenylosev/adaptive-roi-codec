@@ -240,18 +240,7 @@ def stage_frame_records(
     total = len(records)
 
     def localize(source: Path) -> Path:
-        if source in localized:
-            return localized[source]
-        try:
-            relative = source.relative_to(frames_root)
-        except ValueError:
-            relative = Path(source.name)
-        destination = cache_root / relative
-        if not destination.exists():
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
-        localized[source] = destination
-        return destination
+        return localize_frame_path(source, frames_root, cache_root, localized)
 
     staged: list[FrameRecord] = []
     for index, record in enumerate(records, start=1):
@@ -268,6 +257,37 @@ def stage_frame_records(
 
     logger.info("Staged %s frame records under %s", len(staged), cache_root)
     return staged
+
+
+def localize_frame_path(
+    source: Path,
+    frames_root: Path,
+    cache_root: Path,
+    localized: dict[Path, Path],
+) -> Path:
+    """Copy a single frame to local SSD on first access (deduplicated by source path)."""
+    if source in localized:
+        return localized[source]
+    try:
+        relative = source.relative_to(frames_root)
+    except ValueError:
+        relative = Path(source.name)
+    destination = cache_root / relative
+    if not destination.exists():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copy2(source, destination)
+        except OSError as exc:
+            if exc.errno == 28:
+                raise OSError(
+                    exc.errno,
+                    f"{exc.strerror} while staging {source} -> {destination}. "
+                    "Reduce max_frames, disable stage_frames_local, or use a custom "
+                    "Docker image so pip/venv does not fill the root filesystem.",
+                ) from exc
+            raise
+    localized[source] = destination
+    return destination
 
 
 class KvasirPreprocessedFrameDataset(Dataset[FrameSample]):
@@ -305,12 +325,18 @@ class KvasirPreprocessedFrameDataset(Dataset[FrameSample]):
         if not records:
             raise FileNotFoundError(f"No preprocessed frames under {frames_root} for split={split!r}")
 
-        if stage_frames_local and local_frame_cache is not None:
-            records = stage_frame_records(
-                records,
-                frames_root,
+        self.stage_frames_local = bool(stage_frames_local and local_frame_cache is not None)
+        self.local_frame_cache = local_frame_cache
+        self._localized_paths: dict[Path, Path] = {}
+        self._staging_progress_callback = staging_progress_callback
+        self._staging_progress_every = max(1, len(records) // 20)
+        self._staging_completed = 0
+
+        if self.stage_frames_local and local_frame_cache is not None:
+            local_frame_cache.mkdir(parents=True, exist_ok=True)
+            logger.info(
+                "Lazy local staging enabled: frames copy to %s on first dataloader access",
                 local_frame_cache,
-                progress_callback=staging_progress_callback,
             )
 
         self.records = records
@@ -318,12 +344,36 @@ class KvasirPreprocessedFrameDataset(Dataset[FrameSample]):
     def __len__(self) -> int:
         return len(self.records)
 
+    def _resolve_frame_path(self, source: Path) -> Path:
+        if not self.stage_frames_local or self.local_frame_cache is None:
+            return source
+        had = len(self._localized_paths)
+        resolved = localize_frame_path(
+            source,
+            self.frames_root,
+            self.local_frame_cache,
+            self._localized_paths,
+        )
+        if len(self._localized_paths) > had:
+            self._staging_completed += 1
+            callback = self._staging_progress_callback
+            total = len(self.records)
+            if callback and (
+                self._staging_completed == 1
+                or self._staging_completed == total
+                or self._staging_completed % self._staging_progress_every == 0
+            ):
+                callback(self._staging_completed, total)
+        return resolved
+
     def __getitem__(self, index: int) -> FrameSample:
         record = self.records[index]
-        tensor = load_frame_tensor(record.path)
+        frame_path = self._resolve_frame_path(record.path)
+        tensor = load_frame_tensor(frame_path)
         prev = None
         if record.prev_path is not None:
-            prev = load_frame_tensor(record.prev_path)
+            prev_path = self._resolve_frame_path(record.prev_path)
+            prev = load_frame_tensor(prev_path)
         return FrameSample(
             frame=tensor,
             prev_frame=prev,

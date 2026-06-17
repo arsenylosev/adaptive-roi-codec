@@ -44,7 +44,6 @@ s3-mounts:
   - ${S3_CONNECTOR_ID}
 
 cloud-instance-types:
-  - gt4.1
   - g1.1
 
 working-storage:

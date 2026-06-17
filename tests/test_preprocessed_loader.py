@@ -102,6 +102,38 @@ def test_stage_frame_records_copies_to_local_cache(tmp_path: Path) -> None:
     assert staged[0].path.is_relative_to(cache_root)
 
 
+def test_preprocessed_dataset_lazy_staging_on_getitem(tmp_path: Path) -> None:
+    frames_root = tmp_path / "frames"
+    source = frames_root / "v1" / f"frame_000000{FRAME_CACHE_SUFFIX}"
+    save_preprocessed_frame(np.zeros((3, 336, 336), dtype=np.float32), source)
+    manifest = frames_root / PREPROCESSED_MANIFEST
+    manifest.write_text(
+        json.dumps(
+            {
+                "video_id": "v1",
+                "frame_index": 0,
+                "path": str(source),
+                "prev_path": None,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    cache_root = tmp_path / "cache"
+
+    dataset = KvasirPreprocessedFrameDataset(
+        frames_root,
+        split="",
+        stage_frames_local=True,
+        local_frame_cache=cache_root,
+    )
+    assert not cache_root.exists() or list(cache_root.rglob("*.npy")) == []
+
+    sample = dataset[0]
+    assert sample.frame.shape == (3, 336, 336)
+    assert list(cache_root.rglob("*.npy"))
+
+
 def test_load_preprocessed_manifest_resolves_relative_paths(tmp_path: Path) -> None:
     frame_a = tmp_path / "v1" / f"frame_000000{FRAME_CACHE_SUFFIX}"
     frame_b = tmp_path / "v1" / f"frame_000030{FRAME_CACHE_SUFFIX}"
