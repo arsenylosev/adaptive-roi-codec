@@ -1,8 +1,15 @@
 # syntax=docker/dockerfile:1
 # GPU training image for Yandex DataSphere Jobs (V100 / CUDA 12.1).
-# Build inside the DataSphere project (resource location: DataSphere, not YCR).
-# Upload this repo to project storage, point "mount path" at it during build,
-# then reference the resource id in Jobs: env: docker: bxxxxxxxxxxxxxxxxxxx
+#
+# Build in DataSphere project UI (location: DataSphere, not YCR).
+# See docker/datasphere-gpu/BUILD.md for mount point troubleshooting.
+#
+# Typical mount point (repo cloned into project disk):
+#   adaptive-roi-codec
+# If jobs/ and adaptive_roi_codec/ sit at project root:
+#   .
+#
+# Then reference the resource in Jobs: env: docker: bxxxxxxxxxxxxxxxxxxx
 
 FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 

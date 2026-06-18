@@ -12,6 +12,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import torch
 import torch.multiprocessing as mp
@@ -325,7 +326,22 @@ def save_checkpoint(
     logger.info("Saved checkpoint to %s", path)
 
 
-def write_metrics_file(metrics_path: Path, metrics: dict[str, float]) -> None:
+def build_train_metrics_report(
+    *,
+    experiment_id: str,
+    epoch_history: list[dict[str, float]],
+) -> dict[str, Any]:
+    """Build job metrics JSON with one record per completed epoch."""
+    payload: dict[str, Any] = {
+        "experiment_id": experiment_id,
+        "epochs": epoch_history,
+    }
+    if epoch_history:
+        payload["final"] = epoch_history[-1]
+    return payload
+
+
+def write_metrics_file(metrics_path: Path, metrics: dict[str, Any]) -> None:
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     with metrics_path.open("w", encoding="utf-8") as handle:
         json.dump(metrics, handle, indent=2)
@@ -512,6 +528,7 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
     optimizer = torch.optim.Adam(params, lr=training_cfg["lr"])
 
     last_metrics: dict[str, float] = {}
+    epoch_metrics_history: list[dict[str, float]] = []
 
     data_wait_total = 0.0
     compute_total = 0.0
@@ -577,14 +594,21 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
                 batch_wait_start = time.perf_counter()
 
             avg_loss = epoch_loss / max(batches, 1)
-            last_metrics = {"epoch": float(epoch), "loss": avg_loss, "batches": float(batches)}
+            epoch_elapsed = time.perf_counter() - epoch_start
+            last_metrics = {
+                "epoch": float(epoch),
+                "loss": avg_loss,
+                "batches": float(batches),
+                "elapsed_s": epoch_elapsed,
+            }
+            epoch_metrics_history.append(last_metrics)
             logger.info(
                 "Epoch %s/%s complete — loss=%.6f batches=%s elapsed=%.1fs",
                 epoch,
                 epochs,
                 avg_loss,
                 batches,
-                time.perf_counter() - epoch_start,
+                epoch_elapsed,
             )
 
             if not skip_checkpoint and (epoch % save_every == 0 or epoch == epochs):
@@ -600,7 +624,11 @@ def train(config_path: str, params_path: str | None, dry_run: bool) -> dict[str,
 
     metrics_path = Path(optional_env("TRAIN_METRICS_PATH", "train_metrics.json"))
     progress.finalize("Writing metrics")
-    write_metrics_file(metrics_path, last_metrics)
+    metrics_report = build_train_metrics_report(
+        experiment_id=str(config.get("experiment_id", "default")),
+        epoch_history=epoch_metrics_history,
+    )
+    write_metrics_file(metrics_path, metrics_report)
     progress.complete("Training finished successfully")
     logger.info("Training finished successfully")
     _release_training_models(
