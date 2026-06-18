@@ -33,7 +33,6 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_STAGE_FRAMES = 4800
 ROOT_DISK_STAGE_THRESHOLD = 0.85
-CACHE_DISK_STAGE_THRESHOLD = 0.90
 STAGE_MODE_BULK = "bulk"
 STAGE_MODE_LAZY = "lazy"
 
@@ -47,20 +46,28 @@ def root_filesystem_staging_headroom(threshold: float = ROOT_DISK_STAGE_THRESHOL
     return (usage.used / usage.total) < threshold
 
 
+def resolve_staging_disk_path(cache_path: Path) -> Path:
+    """Return the extended SSD mount root for free-space checks."""
+    for candidate in (cache_path, *cache_path.parents):
+        if candidate.name == "extended_working_storage":
+            return candidate
+    return cache_path
+
+
 def cache_filesystem_staging_headroom(
     cache_path: Path,
     required_bytes: int,
     *,
-    threshold: float = CACHE_DISK_STAGE_THRESHOLD,
+    free_margin: float = 0.95,
 ) -> bool:
-    """Return True when ``cache_path``'s filesystem has room for ``required_bytes``."""
+    """Return True when the extended SSD has room for ``required_bytes``."""
     cache_path.mkdir(parents=True, exist_ok=True)
+    stat_path = resolve_staging_disk_path(cache_path)
     try:
-        usage = shutil.disk_usage(cache_path)
+        usage = shutil.disk_usage(stat_path)
     except OSError:
         return False
-    reserved = int(usage.total * threshold) - usage.used
-    available = min(usage.free, max(reserved, 0))
+    available = int(usage.free * free_margin)
     return available >= required_bytes
 
 

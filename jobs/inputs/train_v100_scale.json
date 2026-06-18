@@ -1,12 +1,15 @@
 {
-  "experiment_id": "baseline-kappa-2.0",
+  "experiment_id": "v100-kappa-2.0-18ep-bs24",
   "training": {
     "epochs": 18,
-    "batch_size": 24,
+    "batch_size": 36,
     "log_every_batches": 50
   },
   "quantizer": {
     "kappa": 2.0
+  },
+  "roi_detector": {
+    "pretrained": true
   },
   "data": {
     "source": "preprocessed",
