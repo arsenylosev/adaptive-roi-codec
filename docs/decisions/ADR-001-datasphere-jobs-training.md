@@ -10,7 +10,7 @@ Accepted
 
 ## Context
 
-The experiment in [MCE-Experiment-Requirements-EN.md](../../MCE-Experiment-Requirements-EN.md) targets:
+The experiment targets (documented in [docs/opisanie-eksperimenta.md](../opisanie-eksperimenta.md)):
 
 - Kvasir-Capsule (~61 GB) stored in Yandex Object Storage
 - GPU training on V100-class hardware (~20 h per run)
@@ -71,4 +71,4 @@ Training must not download the full dataset or checkpoints to the local machine.
 
 - [DataSphere Jobs concept](https://yandex.cloud/en/docs/datasphere/concepts/jobs/)
 - [Running DataSphere Jobs](https://yandex.cloud/en/docs/datasphere/operations/projects/work-with-jobs)
-- [MCE-Experiment-Requirements-EN.md](../../MCE-Experiment-Requirements-EN.md) §6, §8
+- [Experiment description (RU)](../opisanie-eksperimenta.md) §6–8

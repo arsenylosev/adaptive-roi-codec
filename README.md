@@ -1,6 +1,6 @@
 # Adaptive ROI Neural Video Codec
 
-Neural video codec for capsule endoscopy with adaptive bitrate allocation across clinically significant regions of interest (ROI). See [MCE-Experiment-Requirements-EN.md](MCE-Experiment-Requirements-EN.md) for the full experiment specification.
+Neural video codec for capsule endoscopy with adaptive bitrate allocation across clinically significant regions of interest (ROI). Full experiment specification (for the scientific article): [docs/opisanie-eksperimenta.md](docs/opisanie-eksperimenta.md) (Russian). Russian README: [README.ru.md](README.ru.md).
 
 Training uses **native Kvasir-Capsule 336×336** video frames ([ADR-002](docs/decisions/ADR-002-native-336-training-resolution.md)). Heavy training runs on **Yandex Datasphere Jobs** (GPU). Local execution is for manifest generation, smoke tests, and debugging.
 
@@ -99,5 +99,6 @@ Commit messages follow [Conventional Commits](CONTRIBUTING.md) (`feat:`, `fix:`,
 
 - [Cloud launch guide](docs/guides/cloud-launch.md)
 - [DataSphere S3 connector setup](docs/guides/datasphere-s3-connector.md)
-- [MCE-Experiment-Requirements-EN.md](MCE-Experiment-Requirements-EN.md)
+- [Experiment description (RU)](docs/opisanie-eksperimenta.md)
+- [README (RU)](README.ru.md)
 - [DataSphere Jobs](https://yandex.cloud/en/docs/datasphere/concepts/jobs/)

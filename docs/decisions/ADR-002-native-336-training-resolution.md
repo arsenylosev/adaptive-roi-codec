@@ -10,7 +10,7 @@ Accepted
 
 ## Context
 
-The project specification ([MCE-Experiment-Requirements-EN.md](../../MCE-Experiment-Requirements-EN.md)) describes a Full HD (1920×1080) deployment target and paper-scale latent tensors (120×68×192). The **actual Kvasir-Capsule release** used in this repository stores:
+The project experiment description ([docs/opisanie-eksperimenta.md](../opisanie-eksperimenta.md)) and prior paper drafts describe a Full HD (1920×1080) deployment target and paper-scale latent tensors (120×68×192). The **actual Kvasir-Capsule release** used in this repository stores:
 
 - **43 labelled MP4 videos** at **336×336**, 30 fps (~31 GB in the current partial download)
 - **14 labelled image archives** with 336×336 JPEG frames (`{video_id}_{frame_idx}.jpg`)
