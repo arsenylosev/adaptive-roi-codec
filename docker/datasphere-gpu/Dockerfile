@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pip \
         libgl1 \
         libglib2.0-0 \
+    && useradd -ms /bin/bash --uid 1000 jupyter \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3.11 -m venv "${VIRTUAL_ENV}" \

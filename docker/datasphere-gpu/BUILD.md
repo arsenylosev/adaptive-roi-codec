@@ -54,6 +54,23 @@ Use the row where **both** are `True` as your mount point (relative to `project/
 4. **Docker file:** paste `docker/datasphere-gpu/Dockerfile` from the repo (paths assume repo root as context)
 5. **Build** → **Activate** → use resource id in job YAML: `env: docker: bxxxxxxxxxxxxxxxxxxx`
 
+## DataSphere post-build validation
+
+After `docker build`, DataSphere runs platform tests on the image. One required check is:
+
+```text
+Checking jupyter user existence .. FAILED
+Unable to find user `jupyter`
+```
+
+**Fix:** create user `jupyter` with UID **1000** in the Dockerfile (required by [DataSphere user-images docs](https://yandex.cloud/en/docs/datasphere/operations/user-images)):
+
+```dockerfile
+RUN useradd -ms /bin/bash --uid 1000 jupyter
+```
+
+This is included in `docker/datasphere-gpu/Dockerfile`. Jobs may still run as root inside the container; the user must exist in `/etc/passwd` for the platform test to pass.
+
 ## Job reference
 
 See `docker/datasphere-gpu/job_train.docker.yaml.template`.
