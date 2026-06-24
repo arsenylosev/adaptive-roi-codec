@@ -3,7 +3,23 @@
 **ID эксперимента:** `v100-kappa-2.0-18ep-bs24`  
 **Статус:** успешно (код выхода DataSphere Job = 0)  
 **Время завершения (UTC):** 2026-06-18 10:31:04  
-**Исходные артефакты:** `logs_debug/` (stdout, диагностика, `train_metrics.json`, чекпоинты на S3)
+**Чекпоинты:** Object Storage `checkpoints/v100-kappa-2.0-18ep-bs24/` (эпохи 5, 10, 15, 18)
+
+### Числовые данные (для графиков и таблиц)
+
+Канонический экспорт в репозитории:
+
+| Файл | Назначение |
+|------|------------|
+| [metrics.json](v100-kappa-2.0-18ep-bs24/metrics.json) | Полная структура (конфиг, агрегаты, timeline) |
+| [epochs.csv](v100-kappa-2.0-18ep-bs24/epochs.csv) | **Loss по эпохам**, длительность, I/O |
+| [batch_progress.csv](v100-kappa-2.0-18ep-bs24/batch_progress.csv) | Loss и `data_wait` / `compute` внутри эпох |
+| [gpu_samples.csv](v100-kappa-2.0-18ep-bs24/gpu_samples.csv) | Временной ряд GPU и VRAM |
+| [cpu_samples.csv](v100-kappa-2.0-18ep-bs24/cpu_samples.csv) | Временной ряд CPU контейнера |
+| [checkpoints.csv](v100-kappa-2.0-18ep-bs24/checkpoints.csv) | Пути к чекпоинтам |
+
+Описание форматов: [v100-kappa-2.0-18ep-bs24/README.md](v100-kappa-2.0-18ep-bs24/README.md).  
+Исходный дамп логов: `logs_debug/` (локально, не в git).
 
 ---
 
@@ -49,7 +65,9 @@
 
 ## Результаты
 
-### Метрики по эпохам (из stdout)
+### Метрики по эпохам
+
+Разобраны из stdout в [epochs.csv](v100-kappa-2.0-18ep-bs24/epochs.csv). Сводная таблица:
 
 | Эпоха | Средний loss | Батчей | Время эпохи |
 |------:|-------------:|-------:|------------:|
@@ -76,24 +94,15 @@
 
 | Метрика | Значение |
 |---------|----------|
-| Суммарное время эпох | **~8,2 ч** |
-| Средняя длительность эпохи | **~27,4 мин** |
+| Суммарное время эпох | **8,21 ч** ([metrics.json](v100-kappa-2.0-18ep-bs24/metrics.json)) |
+| Средняя длительность эпохи | **27,37 мин** |
+| Wall-clock job | **8,23 ч** (загрузка весов + холодный старт эпохи 1) |
 | Изменение loss (1 → 18) | **−5,88** (улучшение) |
 | Loss на финальной эпохе | **−23,327** |
 
 ### Выход job (`train_metrics.json`)
 
-Файл содержал **только последнюю эпоху** (старый формат до введения истории по эпохам):
-
-```json
-{
-  "epoch": 18.0,
-  "loss": -23.326916182588437,
-  "batches": 1503.0
-}
-```
-
-Следующие прогоны будут писать массив `epochs[]`; см. `build_train_metrics_report` в `adaptive_roi_codec/train.py`.
+Файл job содержал **только последнюю эпоху** (формат на момент прогона). Полная история **18 эпох** восстановлена в [metrics.json](v100-kappa-2.0-18ep-bs24/metrics.json) из stdout. Новые прогоны пишут `epochs[]` через `build_train_metrics_report` в `adaptive_roi_codec/train.py`.
 
 ### Чекпоинты (S3)
 
@@ -108,17 +117,17 @@
 
 ## Производительность и ресурсы
 
-Диагностика (`logs_debug/diagnostics/`):
+Диагностика ([gpu_samples.csv](v100-kappa-2.0-18ep-bs24/gpu_samples.csv), [cpu_samples.csv](v100-kappa-2.0-18ep-bs24/cpu_samples.csv)):
 
 | Метрика | Значение | Комментарий |
 |---------|----------|-------------|
-| Загрузка GPU (средн.) | **~97%** | Сильное улучшение vs ранние smoke (~17–56%) |
-| VRAM (средняя доля) | **~84%** | ≈ **27 GB / 32 GB** при `batch_size=36` |
-| CPU (средн.) | **~73%** | 8 workers на 8 vCPU |
-| `data_wait`, эпоха 1 (начало) | ~0,89 с/батч | чтение с S3 FUSE (staging выкл.) |
-| `data_wait`, эпоха 1 (конец) | ~0,09 с/батч | прогрев FUSE/кэша |
-| `compute`, эпоха 18 | ~19,5 с/батч | крупный batch |
-| Extended SSD | ~5,3 GB | чекпоинты + torch hub |
+| Загрузка GPU (средн.) | **97,3%** | Сильное улучшение vs ранние smoke (~17–56%) |
+| VRAM (средняя доля) | **83,7%** | ≈ **27 GB / 32 GB** при `batch_size=36` |
+| CPU контейнера (Docker, средн.) | **156%** | мультиядерная отчётность; ≈ **1,56 ядра** из 8 vCPU |
+| `data_wait`, эпоха 1, batch 50 | **6,04 с** | холодный старт S3 FUSE (staging выкл.) |
+| `data_wait`, эпоха 1, batch 1500 | **0,20 с** | прогрев FUSE/кэша |
+| `compute`, эпоха 18, batch 1500 | **19,48 с** | крупный batch |
+| Extended SSD | **5,3 GB** | чекпоинты + torch hub |
 | Root overlay | 65% → 69% | без ENOSPC |
 
 ### Bulk staging
@@ -158,7 +167,7 @@ Disabling stage_frames_local: need ~68.2 GB on …/frame_cache but cache filesys
 4. **Следующие шаги к статье:**
    - включить bulk staging на SSD и замерить I/O;
    - валидация на `val` split;
-   - JSON с метриками по всем эпохам (реализовано после этого прогона);
+   - JSON по всем эпохам для будущих прогонов реализован; для этого прогона история в [metrics.json](v100-kappa-2.0-18ep-bs24/metrics.json);
    - абляции κ по [плану эксперимента](../opisanie-eksperimenta.md).
 
 ---
@@ -167,4 +176,5 @@ Disabling stage_frames_local: need ~68.2 GB on …/frame_cache but cache filesys
 
 - План эксперимента: [docs/opisanie-eksperimenta.md](../opisanie-eksperimenta.md)
 - Параметры job: [jobs/inputs/train_v100_scale.json](../../jobs/inputs/train_v100_scale.json)
-- Сырые логи: `logs_debug/` (локальный экспорт, в git не коммитится)
+- Данные метрик: [v100-kappa-2.0-18ep-bs24/](v100-kappa-2.0-18ep-bs24/)
+- Сырые логи: `logs_debug/` (локальный экспорт для построения метрик; в git не коммитится)

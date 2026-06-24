@@ -332,6 +332,7 @@ Extended troubleshooting: [docs/guides/cloud-launch.md](docs/guides/cloud-launch
 | [docs/guides/cloud-launch.md](docs/guides/cloud-launch.md) | End-to-end cloud setup |
 | [docs/guides/datasphere-s3-connector.md](docs/guides/datasphere-s3-connector.md) | S3 connector + secrets |
 | [docs/decisions/](docs/decisions/) | ADRs |
+| [docs/experiments/](docs/experiments/) | Run reports + committed metrics (JSON/CSV) |
 | [docker/datasphere-gpu/BUILD.md](docker/datasphere-gpu/BUILD.md) | Custom GPU image build |
 
 ---

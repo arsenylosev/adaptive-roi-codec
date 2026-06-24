@@ -1,0 +1,5 @@
+epoch,s3_path,local_path
+5,/job/s3/bt1c4q3f4j5slubn89qe/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_005.pt,/servant/jobs/extended_working_storage/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_005.pt
+10,/job/s3/bt1c4q3f4j5slubn89qe/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_010.pt,/servant/jobs/extended_working_storage/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_010.pt
+15,/job/s3/bt1c4q3f4j5slubn89qe/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_015.pt,/servant/jobs/extended_working_storage/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_015.pt
+18,/job/s3/bt1c4q3f4j5slubn89qe/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_018.pt,/servant/jobs/extended_working_storage/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_018.pt

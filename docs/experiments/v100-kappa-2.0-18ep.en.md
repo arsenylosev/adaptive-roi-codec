@@ -3,7 +3,23 @@
 **Experiment ID:** `v100-kappa-2.0-18ep-bs24`  
 **Status:** Success (DataSphere Job exit code 0)  
 **Completion time (UTC):** 2026-06-18 10:31:04  
-**Primary artifacts:** `logs_debug/` (stdout, diagnostics, `train_metrics.json`, checkpoints on S3)
+**Checkpoints:** Object Storage `checkpoints/v100-kappa-2.0-18ep-bs24/` (epochs 5, 10, 15, 18)
+
+### Numerical data (for plots and tables)
+
+Canonical machine-readable export (committed):
+
+| File | Use |
+|------|-----|
+| [metrics.json](v100-kappa-2.0-18ep-bs24/metrics.json) | Full structured record (config, aggregates, timeline) |
+| [epochs.csv](v100-kappa-2.0-18ep-bs24/epochs.csv) | **Loss vs epoch**, epoch duration, I/O timing |
+| [batch_progress.csv](v100-kappa-2.0-18ep-bs24/batch_progress.csv) | Intra-epoch loss and `data_wait` / `compute` |
+| [gpu_samples.csv](v100-kappa-2.0-18ep-bs24/gpu_samples.csv) | GPU utilization and VRAM time series |
+| [cpu_samples.csv](v100-kappa-2.0-18ep-bs24/cpu_samples.csv) | Container CPU time series |
+| [checkpoints.csv](v100-kappa-2.0-18ep-bs24/checkpoints.csv) | Checkpoint paths |
+
+Format reference: [v100-kappa-2.0-18ep-bs24/README.md](v100-kappa-2.0-18ep-bs24/README.md).  
+Raw log dump used for export: `logs_debug/` (local, not committed).
 
 ---
 
@@ -49,7 +65,9 @@ First full multi-epoch GPU training run of the adaptive ROI neural video codec o
 
 ## Results
 
-### Per-epoch metrics (from stdout)
+### Per-epoch metrics
+
+Parsed from job stdout into [epochs.csv](v100-kappa-2.0-18ep-bs24/epochs.csv). Summary:
 
 | Epoch | Avg loss | Batches | Epoch time |
 |------:|---------:|--------:|-----------:|
@@ -76,24 +94,15 @@ First full multi-epoch GPU training run of the adaptive ROI neural video codec o
 
 | Metric | Value |
 |--------|-------|
-| Total epoch time (sum) | **~8.2 h** |
-| Mean epoch duration | **~27.4 min** |
+| Total epoch time (sum) | **8.21 h** ([metrics.json](v100-kappa-2.0-18ep-bs24/metrics.json)) |
+| Mean epoch duration | **27.37 min** |
+| Wall-clock job duration | **8.23 h** (includes weight download + epoch 1 cold start) |
 | Loss change (epoch 1 → 18) | **−5.88** (improving) |
 | Final epoch avg loss | **−23.327** |
 
 ### Job output (`train_metrics.json`)
 
-The job output file contained **only the final epoch** (legacy format before per-epoch history was implemented):
-
-```json
-{
-  "epoch": 18.0,
-  "loss": -23.326916182588437,
-  "batches": 1503.0
-}
-```
-
-Subsequent runs will write a full `epochs[]` array; see `adaptive_roi_codec/train.py` (`build_train_metrics_report`).
+The DataSphere job output file contained **only the final epoch** (legacy format at run time). The committed [metrics.json](v100-kappa-2.0-18ep-bs24/metrics.json) restores the full **18-epoch history** from stdout. New jobs write `epochs[]` directly via `build_train_metrics_report` in `adaptive_roi_codec/train.py`.
 
 ### Checkpoints (S3)
 
@@ -108,17 +117,17 @@ Subsequent runs will write a full `epochs[]` array; see `adaptive_roi_codec/trai
 
 ## Performance and resource usage
 
-Diagnostics sampled during the run (`logs_debug/diagnostics/`):
+Diagnostics sampled during the run ([gpu_samples.csv](v100-kappa-2.0-18ep-bs24/gpu_samples.csv), [cpu_samples.csv](v100-kappa-2.0-18ep-bs24/cpu_samples.csv)):
 
 | Metric | Value | Comment |
 |--------|-------|---------|
-| GPU utilization (avg) | **~97%** | Strong saturation vs earlier smoke runs (~17–56%) |
-| GPU memory (avg fraction) | **~84%** | ≈ **27 GB / 32 GB** VRAM at `batch_size=36` |
-| CPU utilization (avg) | **~73%** | 8 DataLoader workers on 8 vCPU |
-| Epoch 1 `data_wait` (early) | ~0.89 s/batch | S3 FUSE reads (staging off) |
-| Epoch 1 `data_wait` (late) | ~0.09 s/batch | FUSE / cache warmed up |
-| Epoch 18 `compute` (late) | ~19.5 s/batch | Large batch forward+backward |
-| Extended SSD used | ~5.3 GB | Checkpoints + torch hub cache |
+| GPU utilization (avg) | **97.3%** | Strong saturation vs earlier smoke runs (~17–56%) |
+| GPU memory (avg) | **83.7%** | ≈ **27 GB / 32 GB** VRAM at `batch_size=36` |
+| Container CPU (avg, Docker) | **156%** | Multi-core reporting; ≈ **1.56 cores** busy on 8 vCPU |
+| Epoch 1 `data_wait` at batch 50 | **6.04 s** | S3 FUSE cold start (staging off) |
+| Epoch 1 `data_wait` at batch 1500 | **0.20 s** | FUSE / cache warmed up |
+| Epoch 18 `compute` at batch 1500 | **19.48 s** | Large batch forward+backward |
+| Extended SSD used | **5.3 GB** | Checkpoints + torch hub cache |
 | Root overlay | 65% → 69% used | No ENOSPC failure |
 
 ### Bulk staging
@@ -146,7 +155,7 @@ Extended SSD had **~140 GB free** (`df_before.out`); the headroom check incorrec
 | Epoch 18 complete | 10:30:58 |
 | Metrics + job success | 10:31:04 |
 
-Wall-clock job duration: **~8 h 14 min** (includes MobileNet weight download and epoch 1 cold start).
+Wall-clock job duration: **8 h 14 min** (8.23 h in [metrics.json](v100-kappa-2.0-18ep-bs24/metrics.json); includes MobileNet weight download and epoch 1 cold start).
 
 ---
 
@@ -158,7 +167,7 @@ Wall-clock job duration: **~8 h 14 min** (includes MobileNet weight download and
 4. **Follow-ups for paper-grade evaluation:**
    - Enable bulk SSD staging and re-measure epoch-1 I/O.
    - Run validation on `val` split with frozen metrics (`PSNR`, MS-SSIM, bitrate).
-   - Log per-epoch metrics JSON (implemented post-run).
+   - Per-epoch metrics JSON is implemented for future runs; this run’s history is in [metrics.json](v100-kappa-2.0-18ep-bs24/metrics.json).
    - Compare κ ablations (1.0, 1.5, 2.5) per [experiment plan](../opisanie-eksperimenta.md).
 
 ---
@@ -167,4 +176,5 @@ Wall-clock job duration: **~8 h 14 min** (includes MobileNet weight download and
 
 - Experiment plan (RU): [docs/opisanie-eksperimenta.md](../opisanie-eksperimenta.md)
 - Job params: [jobs/inputs/train_v100_scale.json](../../jobs/inputs/train_v100_scale.json)
-- Raw logs: `logs_debug/` (local debug export, not committed)
+- Metrics data: [v100-kappa-2.0-18ep-bs24/](v100-kappa-2.0-18ep-bs24/)
+- Raw logs: `logs_debug/` (local export used to build metrics; not committed)

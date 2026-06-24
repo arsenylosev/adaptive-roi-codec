@@ -1,0 +1,661 @@
+{
+  "experiment_id": "v100-kappa-2.0-18ep-bs24",
+  "provenance": {
+    "source_folder": "logs_debug/",
+    "exported_at_utc": "2026-06-23T23:57:51Z",
+    "parser": "docs/experiments/v100-kappa-2.0-18ep-bs24/export script",
+    "note": "Per-epoch metrics parsed from stdout.log; job output train_metrics.json contained final epoch only."
+  },
+  "job": {
+    "status": "success",
+    "exit_code": 0,
+    "completed_at_utc": "2026-06-18T10:31:04+00:00",
+    "platform_instance": "g1.1",
+    "gpu_model": "Tesla V100-PCIE-32GB",
+    "pytorch": "2.4.1+cu121",
+    "python": "3.11.13",
+    "started_at_utc": "2026-06-18T02:17:17:00Z",
+    "wall_clock_s": 29627.0,
+    "wall_clock_h": 8.23
+  },
+  "configuration": {
+    "params_json": {
+      "experiment_id": "v100-kappa-2.0-18ep-bs24",
+      "training": {
+        "epochs": 18,
+        "batch_size": 36,
+        "log_every_batches": 50
+      },
+      "quantizer": {
+        "kappa": 2.0
+      },
+      "roi_detector": {
+        "pretrained": true
+      },
+      "data": {
+        "source": "preprocessed",
+        "split": "train",
+        "frame_stride": 30,
+        "num_workers": 8,
+        "prefetch_factor": 4,
+        "shuffle": true,
+        "stage_frames_local": true,
+        "stage_mode": "bulk"
+      }
+    },
+    "base_config": "configs/base.yaml",
+    "effective_batch_size": 36,
+    "frame_count": 54088,
+    "batches_per_epoch": 1503,
+    "stage_frames_local_requested": true,
+    "stage_frames_local_enabled": false,
+    "staging_needed_gb": 68.2,
+    "data_source": "preprocessed",
+    "resolution": "336x336",
+    "quantizer_kappa": 2.0,
+    "learning_rate": 0.0001,
+    "loss_weights": {
+      "alpha": 0.5,
+      "lambda_roi": 1.5,
+      "lambda_rate": 0.01,
+      "lambda_temp": 0.1,
+      "beta_0": 0.01
+    }
+  },
+  "aggregate": {
+    "epoch_count": 18,
+    "total_training_s": 29563.6,
+    "total_training_h": 8.212,
+    "mean_epoch_s": 1642.4,
+    "mean_epoch_min": 27.37,
+    "loss_first": -17.443483,
+    "loss_last": -23.326916,
+    "loss_delta": -5.8834
+  },
+  "epochs": [
+    {
+      "epoch": 1,
+      "avg_loss": -17.443483,
+      "batches": 1503,
+      "elapsed_s": 1746.9,
+      "elapsed_min": 29.115,
+      "completed_at_utc": "2026-06-18T02:47:09:00Z",
+      "batch_50_data_wait_s": 0.89,
+      "batch_50_compute_s": 2.19,
+      "batch_1500_data_wait_s": 0.03,
+      "batch_1500_compute_s": 1.11,
+      "mean_data_wait_s": 0.1183,
+      "mean_compute_s": 1.2257
+    },
+    {
+      "epoch": 2,
+      "avg_loss": -20.089081,
+      "batches": 1503,
+      "elapsed_s": 1627.8,
+      "elapsed_min": 27.13,
+      "completed_at_utc": "2026-06-18T03:14:17:00Z",
+      "batch_50_data_wait_s": 1.06,
+      "batch_50_compute_s": 35.11,
+      "batch_1500_data_wait_s": 0.04,
+      "batch_1500_compute_s": 2.21,
+      "mean_data_wait_s": 0.1417,
+      "mean_compute_s": 5.6107
+    },
+    {
+      "epoch": 3,
+      "avg_loss": -20.631621,
+      "batches": 1503,
+      "elapsed_s": 1626.2,
+      "elapsed_min": 27.103,
+      "completed_at_utc": "2026-06-18T03:41:23:00Z",
+      "batch_50_data_wait_s": 1.21,
+      "batch_50_compute_s": 67.5,
+      "batch_1500_data_wait_s": 0.04,
+      "batch_1500_compute_s": 3.29,
+      "mean_data_wait_s": 0.1607,
+      "mean_compute_s": 9.923
+    },
+    {
+      "epoch": 4,
+      "avg_loss": -21.018854,
+      "batches": 1503,
+      "elapsed_s": 1627.1,
+      "elapsed_min": 27.118,
+      "completed_at_utc": "2026-06-18T04:08:30:00Z",
+      "batch_50_data_wait_s": 1.37,
+      "batch_50_compute_s": 99.87,
+      "batch_1500_data_wait_s": 0.05,
+      "batch_1500_compute_s": 4.37,
+      "mean_data_wait_s": 0.183,
+      "mean_compute_s": 14.2337
+    },
+    {
+      "epoch": 5,
+      "avg_loss": -21.265592,
+      "batches": 1503,
+      "elapsed_s": 1626.9,
+      "elapsed_min": 27.115,
+      "completed_at_utc": "2026-06-18T04:35:37:00Z",
+      "batch_50_data_wait_s": 1.53,
+      "batch_50_compute_s": 132.25,
+      "batch_1500_data_wait_s": 0.05,
+      "batch_1500_compute_s": 5.45,
+      "mean_data_wait_s": 0.204,
+      "mean_compute_s": 18.5443
+    },
+    {
+      "epoch": 6,
+      "avg_loss": -21.46997,
+      "batches": 1503,
+      "elapsed_s": 1626.2,
+      "elapsed_min": 27.103,
+      "completed_at_utc": "2026-06-18T05:02:47:00Z",
+      "batch_50_data_wait_s": 1.76,
+      "batch_50_compute_s": 164.63,
+      "batch_1500_data_wait_s": 0.06,
+      "batch_1500_compute_s": 6.53,
+      "mean_data_wait_s": 0.235,
+      "mean_compute_s": 22.857
+    },
+    {
+      "epoch": 7,
+      "avg_loss": -21.733608,
+      "batches": 1503,
+      "elapsed_s": 1626.8,
+      "elapsed_min": 27.113,
+      "completed_at_utc": "2026-06-18T05:29:54:00Z",
+      "batch_50_data_wait_s": 1.92,
+      "batch_50_compute_s": 197.0,
+      "batch_1500_data_wait_s": 0.06,
+      "batch_1500_compute_s": 7.61,
+      "mean_data_wait_s": 0.2557,
+      "mean_compute_s": 27.167
+    },
+    {
+      "epoch": 8,
+      "avg_loss": -21.930444,
+      "batches": 1503,
+      "elapsed_s": 1626.6,
+      "elapsed_min": 27.11,
+      "completed_at_utc": "2026-06-18T05:57:00:00Z",
+      "batch_50_data_wait_s": 2.07,
+      "batch_50_compute_s": 229.37,
+      "batch_1500_data_wait_s": 0.07,
+      "batch_1500_compute_s": 8.69,
+      "mean_data_wait_s": 0.276,
+      "mean_compute_s": 31.478
+    },
+    {
+      "epoch": 9,
+      "avg_loss": -22.08961,
+      "batches": 1503,
+      "elapsed_s": 1626.5,
+      "elapsed_min": 27.108,
+      "completed_at_utc": "2026-06-18T06:24:07:00Z",
+      "batch_50_data_wait_s": 2.22,
+      "batch_50_compute_s": 261.75,
+      "batch_1500_data_wait_s": 0.07,
+      "batch_1500_compute_s": 9.77,
+      "mean_data_wait_s": 0.296,
+      "mean_compute_s": 35.7907
+    },
+    {
+      "epoch": 10,
+      "avg_loss": -22.258306,
+      "batches": 1503,
+      "elapsed_s": 1635.6,
+      "elapsed_min": 27.26,
+      "completed_at_utc": "2026-06-18T06:51:23:00Z",
+      "batch_50_data_wait_s": 2.38,
+      "batch_50_compute_s": 294.13,
+      "batch_1500_data_wait_s": 0.09,
+      "batch_1500_compute_s": 10.85,
+      "mean_data_wait_s": 0.3333,
+      "mean_compute_s": 40.102
+    },
+    {
+      "epoch": 11,
+      "avg_loss": -22.427656,
+      "batches": 1503,
+      "elapsed_s": 1626.9,
+      "elapsed_min": 27.115,
+      "completed_at_utc": "2026-06-18T07:18:34:00Z",
+      "batch_50_data_wait_s": 2.77,
+      "batch_50_compute_s": 326.51,
+      "batch_1500_data_wait_s": 0.09,
+      "batch_1500_compute_s": 11.93,
+      "mean_data_wait_s": 0.3697,
+      "mean_compute_s": 44.4153
+    },
+    {
+      "epoch": 12,
+      "avg_loss": -22.612864,
+      "batches": 1503,
+      "elapsed_s": 1715.5,
+      "elapsed_min": 28.592,
+      "completed_at_utc": "2026-06-18T07:47:09:00Z",
+      "batch_50_data_wait_s": 2.95,
+      "batch_50_compute_s": 358.89,
+      "batch_1500_data_wait_s": 0.16,
+      "batch_1500_compute_s": 13.0,
+      "mean_data_wait_s": 0.434,
+      "mean_compute_s": 48.7263
+    },
+    {
+      "epoch": 13,
+      "avg_loss": -22.75514,
+      "batches": 1503,
+      "elapsed_s": 1627.4,
+      "elapsed_min": 27.123,
+      "completed_at_utc": "2026-06-18T08:14:17:00Z",
+      "batch_50_data_wait_s": 4.88,
+      "batch_50_compute_s": 391.27,
+      "batch_1500_data_wait_s": 0.16,
+      "batch_1500_compute_s": 14.08,
+      "mean_data_wait_s": 0.6503,
+      "mean_compute_s": 53.038
+    },
+    {
+      "epoch": 14,
+      "avg_loss": -22.843997,
+      "batches": 1503,
+      "elapsed_s": 1649.1,
+      "elapsed_min": 27.485,
+      "completed_at_utc": "2026-06-18T08:41:46:00Z",
+      "batch_50_data_wait_s": 5.47,
+      "batch_50_compute_s": 423.65,
+      "batch_1500_data_wait_s": 0.18,
+      "batch_1500_compute_s": 15.16,
+      "mean_data_wait_s": 0.7293,
+      "mean_compute_s": 57.351
+    },
+    {
+      "epoch": 15,
+      "avg_loss": -23.018798,
+      "batches": 1503,
+      "elapsed_s": 1626.5,
+      "elapsed_min": 27.108,
+      "completed_at_utc": "2026-06-18T09:08:52:00Z",
+      "batch_50_data_wait_s": 5.63,
+      "batch_50_compute_s": 456.04,
+      "batch_1500_data_wait_s": 0.19,
+      "batch_1500_compute_s": 16.24,
+      "mean_data_wait_s": 0.751,
+      "mean_compute_s": 61.663
+    },
+    {
+      "epoch": 16,
+      "avg_loss": -23.137028,
+      "batches": 1503,
+      "elapsed_s": 1626.5,
+      "elapsed_min": 27.108,
+      "completed_at_utc": "2026-06-18T09:36:03:00Z",
+      "batch_50_data_wait_s": 5.88,
+      "batch_50_compute_s": 488.41,
+      "batch_1500_data_wait_s": 0.2,
+      "batch_1500_compute_s": 17.32,
+      "mean_data_wait_s": 0.7837,
+      "mean_compute_s": 65.9733
+    },
+    {
+      "epoch": 17,
+      "avg_loss": -23.20244,
+      "batches": 1503,
+      "elapsed_s": 1627.5,
+      "elapsed_min": 27.125,
+      "completed_at_utc": "2026-06-18T10:03:10:00Z",
+      "batch_50_data_wait_s": 6.04,
+      "batch_50_compute_s": 520.78,
+      "batch_1500_data_wait_s": 0.2,
+      "batch_1500_compute_s": 18.4,
+      "mean_data_wait_s": 0.8047,
+      "mean_compute_s": 70.2843
+    },
+    {
+      "epoch": 18,
+      "avg_loss": -23.326916,
+      "batches": 1503,
+      "elapsed_s": 1667.6,
+      "elapsed_min": 27.793,
+      "completed_at_utc": "2026-06-18T10:30:58:00Z",
+      "batch_50_data_wait_s": 6.19,
+      "batch_50_compute_s": 553.16,
+      "batch_1500_data_wait_s": 0.23,
+      "batch_1500_compute_s": 19.48,
+      "mean_data_wait_s": 0.8313,
+      "mean_compute_s": 74.596
+    }
+  ],
+  "checkpoints": [
+    {
+      "epoch": 5,
+      "s3_path": "/job/s3/bt1c4q3f4j5slubn89qe/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_005.pt",
+      "local_path": "/servant/jobs/extended_working_storage/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_005.pt"
+    },
+    {
+      "epoch": 10,
+      "s3_path": "/job/s3/bt1c4q3f4j5slubn89qe/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_010.pt",
+      "local_path": "/servant/jobs/extended_working_storage/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_010.pt"
+    },
+    {
+      "epoch": 15,
+      "s3_path": "/job/s3/bt1c4q3f4j5slubn89qe/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_015.pt",
+      "local_path": "/servant/jobs/extended_working_storage/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_015.pt"
+    },
+    {
+      "epoch": 18,
+      "s3_path": "/job/s3/bt1c4q3f4j5slubn89qe/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_018.pt",
+      "local_path": "/servant/jobs/extended_working_storage/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_018.pt"
+    }
+  ],
+  "job_output_train_metrics": {
+    "epoch": 18.0,
+    "loss": -23.326916182588437,
+    "batches": 1503.0
+  },
+  "resource_utilization": {
+    "gpu_util_pct": {
+      "sample_count": 5939,
+      "mean": 97.2804,
+      "median": 100.0,
+      "min": 0.0,
+      "max": 100.0
+    },
+    "gpu_mem_pct": {
+      "sample_count": 5939,
+      "mean": 0.8367,
+      "median": 0.8465,
+      "min": 0.0083,
+      "max": 0.8786,
+      "mean_percent_vram": 83.67,
+      "approx_vram_gb_v100_32gb": 26.8
+    },
+    "cpu_util_pct": {
+      "sample_count": 5971,
+      "mean": 155.866,
+      "median": 157.95,
+      "min": 0.01,
+      "max": 337.12,
+      "note": "Docker stats CPU % can exceed 100 on multi-vCPU containers; mean 156% on g1.1 (8 vCPU) ≈ 1.56 CPU cores busy on average.",
+      "approx_cores_busy": 1.56
+    }
+  },
+  "storage": {
+    "df_before": [
+      {
+        "filesystem": "overlay",
+        "size": "99G",
+        "used": "61G",
+        "avail": "34G",
+        "use_pct": "65",
+        "mounted_on": "/"
+      },
+      {
+        "filesystem": "tmpfs",
+        "size": "48G",
+        "used": "0",
+        "avail": "48G",
+        "use_pct": "0",
+        "mounted_on": "/sys/fs/cgroup"
+      },
+      {
+        "filesystem": "/dev/vda2",
+        "size": "99G",
+        "used": "61G",
+        "avail": "34G",
+        "use_pct": "65",
+        "mounted_on": "/kernel"
+      },
+      {
+        "filesystem": "udev",
+        "size": "48G",
+        "used": "0",
+        "avail": "48G",
+        "use_pct": "0",
+        "mounted_on": "/dev"
+      },
+      {
+        "filesystem": "tmpfs",
+        "size": "48G",
+        "used": "0",
+        "avail": "48G",
+        "use_pct": "0",
+        "mounted_on": "/dev/shm"
+      },
+      {
+        "filesystem": "tmpfs",
+        "size": "9.5G",
+        "used": "1.6M",
+        "avail": "9.5G",
+        "use_pct": "1",
+        "mounted_on": "/run"
+      },
+      {
+        "filesystem": "tmpfs",
+        "size": "5.0M",
+        "used": "0",
+        "avail": "5.0M",
+        "use_pct": "0",
+        "mounted_on": "/run/lock"
+      },
+      {
+        "filesystem": "tmpfs",
+        "size": "9.5G",
+        "used": "24K",
+        "avail": "9.5G",
+        "use_pct": "1",
+        "mounted_on": "/run/user/119"
+      },
+      {
+        "filesystem": "adaptive-roi-codec-data",
+        "size": "1.0P",
+        "used": "0",
+        "avail": "1.0P",
+        "use_pct": "0",
+        "mounted_on": "/home/jupyter/mnt/s3/bt1c4q3f4j5slubn89qe"
+      },
+      {
+        "filesystem": "/dev/vdb",
+        "size": "147G",
+        "used": "61M",
+        "avail": "140G",
+        "use_pct": "1",
+        "mounted_on": "/servant/jobs/extended_working_storage"
+      }
+    ],
+    "df_after": [
+      {
+        "filesystem": "overlay",
+        "size": "99G",
+        "used": "65G",
+        "avail": "30G",
+        "use_pct": "69",
+        "mounted_on": "/"
+      },
+      {
+        "filesystem": "tmpfs",
+        "size": "48G",
+        "used": "0",
+        "avail": "48G",
+        "use_pct": "0",
+        "mounted_on": "/sys/fs/cgroup"
+      },
+      {
+        "filesystem": "/dev/vda2",
+        "size": "99G",
+        "used": "65G",
+        "avail": "30G",
+        "use_pct": "69",
+        "mounted_on": "/kernel"
+      },
+      {
+        "filesystem": "udev",
+        "size": "48G",
+        "used": "0",
+        "avail": "48G",
+        "use_pct": "0",
+        "mounted_on": "/dev"
+      },
+      {
+        "filesystem": "tmpfs",
+        "size": "48G",
+        "used": "0",
+        "avail": "48G",
+        "use_pct": "0",
+        "mounted_on": "/dev/shm"
+      },
+      {
+        "filesystem": "tmpfs",
+        "size": "9.5G",
+        "used": "1.6M",
+        "avail": "9.5G",
+        "use_pct": "1",
+        "mounted_on": "/run"
+      },
+      {
+        "filesystem": "tmpfs",
+        "size": "5.0M",
+        "used": "0",
+        "avail": "5.0M",
+        "use_pct": "0",
+        "mounted_on": "/run/lock"
+      },
+      {
+        "filesystem": "tmpfs",
+        "size": "9.5G",
+        "used": "24K",
+        "avail": "9.5G",
+        "use_pct": "1",
+        "mounted_on": "/run/user/119"
+      },
+      {
+        "filesystem": "adaptive-roi-codec-data",
+        "size": "1.0P",
+        "used": "0",
+        "avail": "1.0P",
+        "use_pct": "0",
+        "mounted_on": "/home/jupyter/mnt/s3/bt1c4q3f4j5slubn89qe"
+      },
+      {
+        "filesystem": "/dev/vdb",
+        "size": "147G",
+        "used": "5.3G",
+        "avail": "134G",
+        "use_pct": "4",
+        "mounted_on": "/servant/jobs/extended_working_storage"
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "event": "job_start_cuda_init",
+      "timestamp_utc": "2026-06-18T02:17:17:00Z"
+    },
+    {
+      "event": "epoch_1_complete",
+      "timestamp_utc": "2026-06-18T02:47:09:00Z",
+      "avg_loss": -17.443483
+    },
+    {
+      "event": "epoch_2_complete",
+      "timestamp_utc": "2026-06-18T03:14:17:00Z",
+      "avg_loss": -20.089081
+    },
+    {
+      "event": "epoch_3_complete",
+      "timestamp_utc": "2026-06-18T03:41:23:00Z",
+      "avg_loss": -20.631621
+    },
+    {
+      "event": "epoch_4_complete",
+      "timestamp_utc": "2026-06-18T04:08:30:00Z",
+      "avg_loss": -21.018854
+    },
+    {
+      "event": "epoch_5_complete",
+      "timestamp_utc": "2026-06-18T04:35:37:00Z",
+      "avg_loss": -21.265592
+    },
+    {
+      "event": "epoch_6_complete",
+      "timestamp_utc": "2026-06-18T05:02:47:00Z",
+      "avg_loss": -21.46997
+    },
+    {
+      "event": "epoch_7_complete",
+      "timestamp_utc": "2026-06-18T05:29:54:00Z",
+      "avg_loss": -21.733608
+    },
+    {
+      "event": "epoch_8_complete",
+      "timestamp_utc": "2026-06-18T05:57:00:00Z",
+      "avg_loss": -21.930444
+    },
+    {
+      "event": "epoch_9_complete",
+      "timestamp_utc": "2026-06-18T06:24:07:00Z",
+      "avg_loss": -22.08961
+    },
+    {
+      "event": "epoch_10_complete",
+      "timestamp_utc": "2026-06-18T06:51:23:00Z",
+      "avg_loss": -22.258306
+    },
+    {
+      "event": "epoch_11_complete",
+      "timestamp_utc": "2026-06-18T07:18:34:00Z",
+      "avg_loss": -22.427656
+    },
+    {
+      "event": "epoch_12_complete",
+      "timestamp_utc": "2026-06-18T07:47:09:00Z",
+      "avg_loss": -22.612864
+    },
+    {
+      "event": "epoch_13_complete",
+      "timestamp_utc": "2026-06-18T08:14:17:00Z",
+      "avg_loss": -22.75514
+    },
+    {
+      "event": "epoch_14_complete",
+      "timestamp_utc": "2026-06-18T08:41:46:00Z",
+      "avg_loss": -22.843997
+    },
+    {
+      "event": "epoch_15_complete",
+      "timestamp_utc": "2026-06-18T09:08:52:00Z",
+      "avg_loss": -23.018798
+    },
+    {
+      "event": "epoch_16_complete",
+      "timestamp_utc": "2026-06-18T09:36:03:00Z",
+      "avg_loss": -23.137028
+    },
+    {
+      "event": "epoch_17_complete",
+      "timestamp_utc": "2026-06-18T10:03:10:00Z",
+      "avg_loss": -23.20244
+    },
+    {
+      "event": "epoch_18_complete",
+      "timestamp_utc": "2026-06-18T10:30:58:00Z",
+      "avg_loss": -23.326916
+    },
+    {
+      "event": "checkpoint_epoch_005",
+      "s3_path": "/job/s3/bt1c4q3f4j5slubn89qe/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_005.pt"
+    },
+    {
+      "event": "checkpoint_epoch_010",
+      "s3_path": "/job/s3/bt1c4q3f4j5slubn89qe/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_010.pt"
+    },
+    {
+      "event": "checkpoint_epoch_015",
+      "s3_path": "/job/s3/bt1c4q3f4j5slubn89qe/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_015.pt"
+    },
+    {
+      "event": "checkpoint_epoch_018",
+      "s3_path": "/job/s3/bt1c4q3f4j5slubn89qe/checkpoints/v100-kappa-2.0-18ep-bs24/epoch_018.pt"
+    }
+  ]
+}
