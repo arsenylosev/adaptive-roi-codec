@@ -22,7 +22,10 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from adaptive_roi_codec.model.quantizer import AdaptiveQuantizer
+
+def q_t_from_e_roi(q_min: float, q_max: float, kappa: float, e_roi: np.ndarray) -> np.ndarray:
+    """q_t(E_ROI; κ) — та же формула, что в AdaptiveQuantizer.global_step."""
+    return q_min + (q_max - q_min) * np.power(e_roi, kappa)
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,15 +43,13 @@ def main() -> int:
     kappas = [float(x) for x in args.kappas.split(",")]
     e_roi = np.linspace(0.0, 1.0, 500)
 
-    quantizer = AdaptiveQuantizer(q_min=args.q_min, q_max=args.q_max)
-
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
 
     # --- Левый график: q_t(E_ROI; κ)
     ax = axes[0]
     cmap = plt.get_cmap("viridis")
     for i, kappa in enumerate(kappas):
-        q = quantizer.global_step(torch.tensor(e_roi).float().view(1, -1, 1, 1)).numpy().ravel()
+        q = q_t_from_e_roi(args.q_min, args.q_max, kappa, e_roi)
         color = cmap(i / max(1, len(kappas) - 1))
         ax.plot(e_roi, q, label=f"κ = {kappa}", linewidth=2.5, color=color)
     # Baseline — фиксированный шаг = 1
@@ -65,7 +66,7 @@ def main() -> int:
     # Битрейт обратно пропорционален log2(1 + 1/q^2) — для наглядности нормируем
     ax = axes[1]
     for i, kappa in enumerate(kappas):
-        q = quantizer.global_step(torch.tensor(e_roi).float().view(1, -1, 1, 1)).numpy().ravel()
+        q = q_t_from_e_roi(args.q_min, args.q_max, kappa, e_roi)
         # Относительный битрейт = 1/q (грубое приближение)
         bitrate_rel = 1.0 / q
         # Нормируем к baseline (q=1 ⇒ bitrate_rel = 1)
@@ -97,11 +98,11 @@ def main() -> int:
     # Краткая сводка в stdout
     print("\nШаг квантования q_t при E_ROI = 0.5 (ROI-зона):")
     for kappa in kappas:
-        q_mid = quantizer.global_step(torch.tensor([[[[0.5]]]]).float()).item()
+        q_mid = q_t_from_e_roi(args.q_min, args.q_max, kappa, np.array([0.5]))[0]
         print(f"  κ = {kappa:>4}: q_t = {q_mid:.3f}  (в {1.0 / q_mid:.2f}× больше бит, чем baseline)")
     print("\nШаг квантования q_t при E_ROI = 0.05 (фон):")
     for kappa in kappas:
-        q_bg = quantizer.global_step(torch.tensor([[[[0.05]]]]).float()).item()
+        q_bg = q_t_from_e_roi(args.q_min, args.q_max, kappa, np.array([0.05]))[0]
         print(f"  κ = {kappa:>4}: q_t = {q_bg:.3f}  (в {1.0 / q_bg:.2f}× больше бит, чем baseline)")
     return 0
 

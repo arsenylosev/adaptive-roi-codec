@@ -21,10 +21,12 @@
 
 ```bash
 cd adaptive-roi-codec
-uv sync --extra dev
+uv sync
 ```
 
-Минимальный набор библиотек для демо: `torch`, `torchvision`, `opencv-python`, `numpy`, `matplotlib`, `Pillow`.
+`matplotlib` и остальные зависимости для демо-скриптов объявлены в `pyproject.toml` (устанавливаются автоматически). Опционально: `uv sync --extra dev` для pytest и ruff.
+
+Минимальный набор библиотек для демо: `torch`, `torchvision`, `opencv-python` (через albumentations), `numpy`, `matplotlib`, `Pillow`.
 
 ### 0.2. Датасет
 
@@ -41,10 +43,14 @@ uv sync --extra dev
 
 ### 0.3. Чекпоинты
 
-Если в репозитории ещё нет обученных весов (`checkpoints/<experiment>/epoch_*.pt`), для ЭВМ допустимо:
+Если в репозитории ещё нет обученных весов (`checkpoints/epoch_*.pt` или `checkpoints/<experiment>/epoch_*.pt`), для ЭВМ допустимо:
 
-1. Обучить короткую модель на CPU: `--dry-run` + 1–2 эпохи на синтетике (см. эпизод 5);
+1. Обучить короткую модель на CPU: `--dry-run` (см. эпизод 7);
 2. Либо загрузить веса с S3 (`s3://<bucket>/checkpoints/<experiment_id>/`) — если соответствующий прогон уже делался в DataSphere.
+
+Имена файлов чекпоинтов — **три цифры эпохи**: `epoch_018.pt`, не `epoch_18.pt`.
+
+**Загрузка в `demo_inference.py`:** по умолчанию из чекпоинта берётся только **VAE**; ROI-детектор — **pretrained MobileNetV3** (наглядная карта значимости). Флаг `--load-roi-checkpoint` загружает ROI из чекпоинта; при вырожденной маске скрипт автоматически откатывается на pretrained.
 
 Для ЭВМ **синтетически инициализированная модель тоже подходит**: комиссии важно увидеть, что *архитектура и пайплайн работают*, а не конкретные метрики PSNR/SSIM.
 
@@ -73,9 +79,9 @@ uv sync --extra dev
 **Контрольные точки** (обязательно должны быть видны/слышны на записи):
 
 - [K1] На экране в эпизоде 1 — название, соответствующее регистрационному документу.
-- [K2] В эпизоде 5 — картинка side-by-side: `original | roi_mask | quantized_latent_map | reconstruction`.
+- [K2] В эпизоде 5 — PNG 2×2: `original | roi_overlay | quantized_latent | reconstruction` (ROI — теплокарта поверх кадра).
 - [K3] В эпизоде 6 — график `q_t(E_ROI)` при разных κ (минимум 3 кривых).
-- [K4] В эпизоде 7 — в логах видны имена компонентных лоссов (`base`, `roi`, `rate`, `temp`).
+- [K4] В эпизоде 7 — в логах видны `Device: cpu`, `Training resolution: 336x336`, строка `Epoch … complete — loss=…`, сохранение чекпоинта.
 
 ---
 
@@ -114,10 +120,10 @@ head kvasir-capsule/MANIFEST.json
 cat kvasir-capsule/splits/train_videos.txt | head -5
 ```
 
-**Опционально (если нужен препроцессинг):**
+**Опционально (если нужен препроцессинг):** замените `<VIDEO_ID>` на имя файла без `.mp4` (например `131368cc17e44240`):
 
 ```bash
-uv run extract-frames --video kvasir-capsule/raw/labelled_videos/<one>.mp4 \
+uv run extract-frames --video kvasir-capsule/raw/labelled_videos/131368cc17e44240.mp4 \
                       --output kvasir-capsule/processed/frames \
                       --height 336 --width 336
 ```
@@ -136,30 +142,47 @@ uv run extract-frames --video kvasir-capsule/raw/labelled_videos/<one>.mp4 \
 
 ### Эпизод 5. Live inference demo (3:30 – 5:10)
 
-**На экране:** два окна: терминал слева, matplotlib-визуализация справа.
+**На экране:** два окна: терминал слева, PNG-визуализация справа.
 
 ```bash
 # Показать справку
 uv run python scripts/demo_inference.py --help
 
-# Запуск на одном MP4
+# Рекомендуемый запуск: MP4 + обученный VAE + авто-выбор кадра
 uv run python scripts/demo_inference.py \
-    --video kvasir-capsule/raw/labelled_videos/<one>.mp4 \
-    --frame-idx 0 \
+    --video kvasir-capsule/raw/labelled_videos/131368cc17e44240.mp4 \
+    --auto-frame \
+    --checkpoint checkpoints/epoch_018.pt \
+    --output docs/screencast/inference_demo.png
+
+# Без чекпоинта (pretrained ROI + random VAE — тоже допустимо для ЭВМ)
+uv run python scripts/demo_inference.py \
+    --video kvasir-capsule/raw/labelled_videos/131368cc17e44240.mp4 \
+    --auto-frame \
+    --output docs/screencast/inference_demo.png
+
+# Альтернатива: один препроцессированный кадр .npy
+uv run python scripts/demo_inference.py \
+    --frame kvasir-capsule/processed/frames/131368cc17e44240/frame_000000.npy \
+    --checkpoint checkpoints/epoch_018.pt \
     --output docs/screencast/inference_demo.png
 ```
 
-Скрипт выводит PNG размером 2×2:
+> **Важно:** флаг кадра — `--frame-idx` (через дефис), не `--frame_idx`. Плейсхолдеры вроде `<one>.mp4` нужно заменить реальным именем файла.
+
+Скрипт выводит PNG 2×2:
 
 ```
 ┌──────────────────┬──────────────────┐
-│  Original frame  │   ROI mask (3ch) │
+│  Original frame  │  ROI overlay     │
 ├──────────────────┼──────────────────┤
 │ Quantized latent │  Reconstruction  │
 └──────────────────┴──────────────────┘
 ```
 
-**Голос:** «Запускаем скрипт `demo_inference.py`. Он берёт один кадр из видео (по умолчанию — нулевой), прогоняет через детектор ROI, визуализирует карту значимости, затем — через VAE + адаптивный квантизатор, и показывает результат. На карте ROI видно, что модель выделяет центральную часть кадра — там, где в капсульной эндоскопии обычно находятся патологические образования. Шаг квантования на этих областях меньше — значит, битрейт там выше.»
+Панель ROI — полупрозрачная теплокарта (magma) поверх кадра с контурными линиями; при малом контрасте маски контраст усиливается для отображения.
+
+**Голос:** «Запускаем скрипт `demo_inference.py`. Он берёт кадр из видео (флаг `--auto-frame` выбирает кадр с наиболее выраженной ROI-структурой), прогоняет через детектор ROI и VAE с адаптивным квантизатором. На карте ROI видно, что модель выделяет участки с патологически значимой текстурой — там шаг квантования меньше и битрейт выше.»
 
 ### Эпизод 6. Адаптивное распределение битрейта (5:10 – 6:00)
 
@@ -175,27 +198,26 @@ uv run python scripts/demo_quantization.py \
 ### Эпизод 7. Dry-run обучения (6:00 – 6:40)
 
 ```bash
-# Синтетика (без датасета)
-uv run python -m adaptive_roi_codec.train \
+# Синтетика (без датасета). На ноутбуке без GPU отключите TRAIN_REQUIRE_CUDA:
+TRAIN_REQUIRE_CUDA=0 uv run python -m adaptive_roi_codec.train \
     --config configs/base.yaml \
     --dry-run
-
-# Короткий прогон на реальных данных (если есть)
-uv run python -m adaptive_roi_codec.train \
-    --config configs/base.yaml \
-    --params jobs/inputs/train_smoke.json
 ```
 
 **На экране:** терминал, в логе видны:
 
 ```
+[INFO] Device: cpu
 [INFO] Training resolution: 336x336 data.source=video batch_size=4
-[INFO] Using Kvasir video loader ...
-[INFO] epoch 0 ... loss: total=… base=… roi=… rate=… temp=…
-[INFO] Saved checkpoint to checkpoints/default/epoch_0.pt
+[WARNING] Dry-run mode: using 336x336 synthetic frames
+[INFO] Epoch 1/1 complete — loss=… batches=1 elapsed=…s
+[INFO] Saved checkpoint to checkpoints/default/epoch_001.pt
+[INFO] Training finished successfully
 ```
 
-**Голос:** «Запускаем training в режиме dry-run: один батч, синтетические кадры, инициализация с нуля. В логах видны компоненты суммарной потери — `base` (PSNR+SSIM), `roi` (взвешенная реконструкция в зоне интереса), `rate` (KL-дивергенция), `temp` (temporal loss от motion compensator). Это и есть функция потерь из формулы (14).»
+**Голос:** «Запускаем training в режиме dry-run: один батч, синтетические кадры 336×336. В логах видны разрешение, источник данных и суммарная потеря. Суммарная потеря объединяет реконструкцию (PSNR+SSIM), ROI-взвешенную ошибку, KL-rate и temporal loss от motion compensator — это функция потерь из формулы (14) в `clinical_loss.py`.»
+
+> **Примечание:** полный GPU-прогон на реальных данных — через DataSphere (см. `AGENTS.md`). Локальный `train_smoke.json` требует stage-1 manifest (`frames_cache/frames_manifest.jsonl`) и не обязателен для записи ЭВМ.
 
 ### Эпизод 8. Заключение (6:40 – 7:00)
 
@@ -213,12 +235,16 @@ cat docs/experiments/v100-kappa-2.0-18ep.ru.md | head -40
 
 | Проблема | Решение |
 |----------|---------|
-| Нет GPU | Все скрипты (`demo_inference.py`, `demo_quantization.py`) работают на CPU. `torch.cuda.is_available()` → `False` — это нормально. В README и коде уже есть fallback. |
+| Нет GPU | Все скрипты (`demo_inference.py`, `demo_quantization.py`) работают на CPU. `torch.cuda.is_available()` → `False` — это нормально. |
+| `TRAIN_REQUIRE_CUDA` / `Device: cpu` error | В `.env` может быть `TRAIN_REQUIRE_CUDA=1`. Для локальной записи: `TRAIN_REQUIRE_CUDA=0 uv run python -m adaptive_roi_codec.train …` |
 | Нет датасета Kvasir-Capsule | `--video` принимает любой `.mp4`. Можно взять любой эндоскопический клип либо один публичный кадр. |
-| Не установлен MobileNetV3-pretrained | Скрипт `demo_inference.py` сам подгружает веса через `torchvision`. Если интернета нет — добавьте `--no-pretrained` (ROI detector инициализируется случайно, но пайплайн работает). |
-| Не запускается `uv run` | Используйте `python` напрямую после `source .venv/bin/activate` или `uv pip install -e .` |
-| Matplotlib ругается на headless | Скрипт использует `matplotlib.use("Agg")` — нет требований к дисплею. |
-| Картинка получилась мелкая | `--dpi 150` увеличит PNG. |
+| `unrecognized arguments: --frame_idx` | Используйте `--frame-idx` (дефис). |
+| ROI — «цветной шум» или синий квадрат | Не используйте `--load-roi-checkpoint` без необходимости; добавьте `--auto-frame`; загружайте VAE через `--checkpoint checkpoints/epoch_018.pt` |
+| `ModuleNotFoundError: matplotlib` | `uv sync` в корне репозитория (matplotlib в `pyproject.toml`) |
+| Не установлен MobileNetV3-pretrained | Скрипт подгружает веса через `torchvision`. Если интернета нет — `--no-pretrained` (пайплайн работает, ROI хуже). |
+| Не запускается `uv run` | `source .venv/bin/activate` или `uv pip install -e .` |
+| Matplotlib headless | Скрипты используют `matplotlib.use("Agg")` — дисплей не нужен. |
+| Картинка мелкая | `--dpi 200` увеличит PNG. |
 
 ---
 

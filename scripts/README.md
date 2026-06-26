@@ -17,7 +17,7 @@ cd /path/to/adaptive-roi-codec
 uv sync --extra dev
 ```
 
-Минимальные зависимости: `torch`, `torchvision`, `opencv-python`, `numpy`, `matplotlib`, `Pillow` (всё уже в `pyproject.toml`).
+Минимальные зависимости: `torch`, `torchvision`, `opencv-python`, `numpy`, `matplotlib`, `Pillow` (см. `pyproject.toml`).
 
 ### demo_inference.py
 
